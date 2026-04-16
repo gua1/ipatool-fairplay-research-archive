@@ -46,7 +46,10 @@ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
 		return DownloadOutput{}, fmt.Errorf("failed to send http request: %w", err)
 	}
 
-	if res.Data.FailureType == FailureTypePasswordTokenExpired || res.Data.FailureType == FailureTypeSignInRequired {
+	if res.Data.FailureType == FailureTypePasswordTokenExpired ||
+		res.Data.FailureType == FailureTypeSignInRequired ||
+		res.Data.FailureType == FailureTypeDeviceVerificationFailed ||
+		res.Data.FailureType == FailureTypeLicenseAlreadyExists {
 		return DownloadOutput{}, ErrPasswordTokenExpired
 	}
 
@@ -80,12 +83,14 @@ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
 		return DownloadOutput{}, fmt.Errorf("failed to resolve destination path: %w", err)
 	}
 
-	err = t.downloadFile(item.URL, fmt.Sprintf("%s.tmp", destination), input.Progress)
+	tmpPath := fmt.Sprintf("%s.tmp", destination)
+
+	err = t.downloadFile(item.URL, tmpPath, input.Progress)
 	if err != nil {
 		return DownloadOutput{}, fmt.Errorf("failed to download file: %w", err)
 	}
 
-	err = t.applyPatches(item, input.Account, fmt.Sprintf("%s.tmp", destination), destination)
+	err = t.applyPatches(item, input.Account, tmpPath, destination)
 	if err != nil {
 		return DownloadOutput{}, fmt.Errorf("failed to apply patches: %w", err)
 	}
@@ -260,10 +265,11 @@ func (t *appstore) applyPatches(item downloadItemResult, acc Account, src, dst s
 	}
 	defer srcZip.Close()
 
-	dstFile, err := t.os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0644)
+	dstFile, err := t.os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
+	defer dstFile.Close()
 
 	dstZip := zip.NewWriter(dstFile)
 	defer dstZip.Close()

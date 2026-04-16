@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -42,7 +43,16 @@ func downloadCmd() *cobra.Command {
 				acc = infoResult.Account
 
 				if errors.Is(lastErr, appstore.ErrPasswordTokenExpired) {
-					loginResult, err := dependencies.AppStore.Login(appstore.LoginInput{Email: acc.Email, Password: acc.Password})
+					bagOutput, err := dependencies.AppStore.Bag(appstore.BagInput{})
+					if err != nil {
+						return fmt.Errorf("failed to get bag: %w", err)
+					}
+
+					loginResult, err := dependencies.AppStore.Login(appstore.LoginInput{
+						Email:    acc.Email,
+						Password: acc.Password,
+						Endpoint: bagOutput.AuthEndpoint,
+					})
 					if err != nil {
 						return err
 					}
@@ -62,7 +72,7 @@ func downloadCmd() *cobra.Command {
 
 				if errors.Is(lastErr, appstore.ErrLicenseRequired) {
 					err := dependencies.AppStore.Purchase(appstore.PurchaseInput{Account: acc, App: app})
-					if err != nil {
+					if err != nil && !errors.Is(err, appstore.ErrLicenseAlreadyExists) {
 						return err
 					}
 					purchased = true
@@ -112,7 +122,7 @@ func downloadCmd() *cobra.Command {
 				retry.LastErrorOnly(true),
 				retry.DelayType(retry.FixedDelay),
 				retry.Delay(time.Millisecond),
-				retry.Attempts(2),
+				retry.Attempts(3),
 				retry.RetryIf(func(err error) bool {
 					lastErr = err
 
