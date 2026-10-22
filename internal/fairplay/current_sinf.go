@@ -9,12 +9,13 @@ import (
 )
 
 const (
-	currentSINFModelName        = "macos27.0.1-26A428-current-sinf"
-	currentSINFSupportedProfile = "one FairPlay profile recovered on macOS 27.0.1 (26A428)"
-	currentSINFModelSHA256      = "c9b7c4885f8ca634ee73e4b20de610a0d6d2e7d56336358733526ceca8f2e5bb"
-	currentSINFModelBytes       = 8 + 4 + 4 + 32 + 16 + 16 + 16*256
-	legacySINFModelMagic        = "FPS26A4\x00"
-	enrollmentModelMagic        = "FPSENR1\x00"
+	currentSINFModelName         = "macos27.0.1-26A428-current-sinf"
+	currentSINFSupportedProfile  = "one FairPlay profile recovered on macOS 27.0.1 (26A428)"
+	currentSINFSupportedSelector = "aaaaaaaa:00000002"
+	currentSINFModelSHA256       = "c9b7c4885f8ca634ee73e4b20de610a0d6d2e7d56336358733526ceca8f2e5bb"
+	currentSINFModelBytes        = 8 + 4 + 4 + 32 + 16 + 16 + 16*256
+	legacySINFModelMagic         = "FPS26A4\x00"
+	enrollmentModelMagic         = "FPSENR1\x00"
 )
 
 var errCurrentSINFProfileMismatch = errors.New("SINF does not match the selected FairPlay model")

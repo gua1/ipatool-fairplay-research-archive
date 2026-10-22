@@ -148,8 +148,8 @@ func TestCurrentSINFPortableFixtures(t *testing.T) {
 		righBytes int
 		innerKey  [16]byte
 	}{
-		{"zero-trailer", 0x10203040, 2, 96, [16]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}},
-		{"eight-byte-trailer", 0x50607080, 5, 88, [16]byte{0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01}},
+		{"zero-trailer", 0xaaaaaaaa, 2, 96, [16]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}},
+		{"eight-byte-trailer", 0xaaaaaaaa, 2, 88, [16]byte{0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01}},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestCurrentSINFRejectsMutation(t *testing.T) {
 	}
 }
 
-func TestBundledProfileMismatchNamesSupportedBuild(t *testing.T) {
+func TestBundledSelectorPreflightDiagnostics(t *testing.T) {
 	fixture := syntheticCurrentSINFFixture(t, 0x90a0b0c0, 7, 96, [16]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99})
 	fields, err := parseSINFFields(fixture.sinf)
 	if err != nil {
@@ -208,6 +208,7 @@ func TestBundledProfileMismatchNamesSupportedBuild(t *testing.T) {
 		t.Fatalf("profile mismatch did not name supported build: %v", err)
 	}
 	for _, detail := range []string{
+		currentSINFSupportedSelector,
 		"sinf_sha256=" + digest(fixture.sinf),
 		"priv_bytes=" + fmt.Sprint(len(private)),
 		"priv_sha256=" + digest(private),
@@ -215,5 +216,8 @@ func TestBundledProfileMismatchNamesSupportedBuild(t *testing.T) {
 		if !strings.Contains(err.Error(), detail) {
 			t.Fatalf("profile mismatch omitted %q: %v", detail, err)
 		}
+	}
+	if strings.Contains(err.Error(), "plaintext atom") {
+		t.Fatalf("selector preflight attempted SINF model decoding: %v", err)
 	}
 }

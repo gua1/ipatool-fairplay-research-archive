@@ -3,8 +3,9 @@
 `fairplay-decrypt --model` is an experimental development override. The
 bundled model is validated only for one profile recovered on macOS 27.0.1
 build 26A428; other accounts on the same build can use incompatible profiles.
-An external pack contains a recovered SINF decoder; it does not contain
-executable code or require Apple hardware when it is consumed.
+Its SINF selector is `aaaaaaaa:00000002`. An external pack contains a recovered
+SINF decoder; it does not contain executable code or require Apple hardware
+when it is consumed.
 
 All integers are little-endian. Version 1 is exactly 4,176 bytes:
 

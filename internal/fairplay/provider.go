@@ -21,7 +21,7 @@ func ResolveLogicalKey(sinf []byte) (KeyMaterial, error) {
 	if err != nil {
 		return KeyMaterial{}, err
 	}
-	return resolveLogicalKey(sinf, model, currentSINFModelName, currentSINFModelSHA256, "embedded-build-specific-current-sinf-model", currentSINFSupportedProfile)
+	return resolveLogicalKey(sinf, model, currentSINFModelName, currentSINFModelSHA256, "embedded-build-specific-current-sinf-model", currentSINFSupportedProfile, currentSINFSupportedSelector)
 }
 
 // ResolveLogicalKeyWithModel resolves a SINF with an experimental external
@@ -34,10 +34,10 @@ func ResolveLogicalKeyWithModel(sinf, pack []byte) (KeyMaterial, error) {
 	}
 	modelSHA256 := digest(pack)
 	modelName := "external-current-sinf-" + modelSHA256[:16]
-	return resolveLogicalKey(sinf, model, modelName, modelSHA256, "external-enrollment-model", "")
+	return resolveLogicalKey(sinf, model, modelName, modelSHA256, "external-enrollment-model", "", "")
 }
 
-func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA256, stateOrigin, supportedProfile string) (KeyMaterial, error) {
+func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA256, stateOrigin, supportedProfile, supportedSelector string) (KeyMaterial, error) {
 	var result KeyMaterial
 	fields, err := parseSINFFields(sinf)
 	if err != nil {
@@ -51,12 +51,18 @@ func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA2
 	if err != nil {
 		return result, err
 	}
+	profile := fmt.Sprintf(
+		"%s (sinf_sha256=%s priv_bytes=%d priv_sha256=%s)",
+		selector.Identifier(), digest(sinf), len(private), digest(private),
+	)
+	if supportedSelector != "" && selector.Identifier() != supportedSelector {
+		return result, fmt.Errorf(
+			"unsupported FairPlay profile %s; the bundled model supports selector %s from %s",
+			profile, supportedSelector, supportedProfile,
+		)
+	}
 	innerKey, err := currentSINFPrivateKey(model, private)
 	if err != nil {
-		profile := fmt.Sprintf(
-			"%s (sinf_sha256=%s priv_bytes=%d priv_sha256=%s)",
-			selector.Identifier(), digest(sinf), len(private), digest(private),
-		)
 		if supportedProfile != "" {
 			return result, fmt.Errorf("unsupported FairPlay profile %s; the bundled model is validated only for %s: %w", profile, supportedProfile, err)
 		}

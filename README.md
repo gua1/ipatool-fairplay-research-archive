@@ -77,7 +77,8 @@ if running in an automated environment.
 `fairplay-decrypt` decrypts a personalized IPA using the embedded current-SINF
 model recovered from macOS 27.0.1 build 26A428. Only that recovered FairPlay
 profile is currently supported; the OS version and account age do not identify
-the profile reliably. No device state, Wine, or runtime hardware call is needed
+the profile reliably. The validated SINF selector is
+`aaaaaaaa:00000002`. No device state, Wine, or runtime hardware call is needed
 when the IPA matches the bundled model:
 
 ```shell
