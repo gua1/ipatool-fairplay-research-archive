@@ -53,10 +53,14 @@ func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA2
 	}
 	innerKey, err := currentSINFPrivateKey(model, private)
 	if err != nil {
+		profile := fmt.Sprintf(
+			"%s (sinf_sha256=%s priv_bytes=%d priv_sha256=%s)",
+			selector.Identifier(), digest(sinf), len(private), digest(private),
+		)
 		if supportedProfile != "" {
-			return result, fmt.Errorf("unsupported FairPlay profile %s; the bundled model is validated only for %s: %w", selector.Identifier(), supportedProfile, err)
+			return result, fmt.Errorf("unsupported FairPlay profile %s; the bundled model is validated only for %s: %w", profile, supportedProfile, err)
 		}
-		return result, fmt.Errorf("FairPlay profile %s does not match the selected experimental model: %w", selector.Identifier(), err)
+		return result, fmt.Errorf("FairPlay profile %s does not match the selected experimental model: %w", profile, err)
 	}
 	defer clear(innerKey[:])
 	logical := logicalFromInnerKey(innerKey)

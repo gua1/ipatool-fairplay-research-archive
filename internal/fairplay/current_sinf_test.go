@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -205,5 +206,14 @@ func TestBundledProfileMismatchNamesSupportedBuild(t *testing.T) {
 	_, err = ResolveLogicalKey(fixture.sinf)
 	if err == nil || !strings.Contains(err.Error(), currentSINFSupportedProfile) {
 		t.Fatalf("profile mismatch did not name supported build: %v", err)
+	}
+	for _, detail := range []string{
+		"sinf_sha256=" + digest(fixture.sinf),
+		"priv_bytes=" + fmt.Sprint(len(private)),
+		"priv_sha256=" + digest(private),
+	} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Fatalf("profile mismatch omitted %q: %v", detail, err)
+		}
 	}
 }

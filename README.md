@@ -104,8 +104,10 @@ download and SINF replication. The decoder validates the complete decrypted
 `key `/`iviv`/`tmpr`/`righ`/`name` atom geometry and fails closed when the SINF
 does not match the current model. Inputs are never overwritten; outputs and
 private reports default beside the source IPA. A profile mismatch reports the
-supported macOS release and fails closed. The decrypted analysis IPA must be
-recursively re-signed before installation.
+validated profile, SINF selector, SINF SHA-256, and private-payload size/hash,
+then fails closed without creating an output IPA. These diagnostics contain no
+plaintext key. The decrypted analysis IPA must be recursively re-signed before
+installation.
 
 ### FairPlay enrollment diagnostics
 
