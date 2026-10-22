@@ -203,7 +203,7 @@ func TestBundledProfileMismatchNamesSupportedBuild(t *testing.T) {
 	}
 	private[31] ^= 1
 	_, err = ResolveLogicalKey(fixture.sinf)
-	if err == nil || !strings.Contains(err.Error(), currentSINFSupportedBuild) {
+	if err == nil || !strings.Contains(err.Error(), currentSINFSupportedProfile) {
 		t.Fatalf("profile mismatch did not name supported build: %v", err)
 	}
 }

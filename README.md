@@ -70,13 +70,15 @@ if running in an automated environment.
 
 ### FairPlay decryption
 
-> **Experimental:** FairPlay decryption currently supports only macOS 27.0.1
-> (build 26A428) with a freshly created Apple ID. It is not guaranteed to work.
+> **Experimental:** FairPlay decryption is validated only for one profile
+> recovered on macOS 27.0.1 (build 26A428). A fresh Apple ID on the same build
+> can still use a different, unsupported profile. It is not guaranteed to work.
 
 `fairplay-decrypt` decrypts a personalized IPA using the embedded current-SINF
-model recovered from macOS 27.0.1 build 26A428. This is the only FairPlay
-profile currently supported. It needs no device state, Wine, or runtime
-hardware call when the IPA matches that profile:
+model recovered from macOS 27.0.1 build 26A428. Only that recovered FairPlay
+profile is currently supported; the OS version and account age do not identify
+the profile reliably. No device state, Wine, or runtime hardware call is needed
+when the IPA matches the bundled model:
 
 ```shell
 ipatool fairplay-decrypt --input App.ipa
