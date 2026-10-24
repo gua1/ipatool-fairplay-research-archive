@@ -37,7 +37,7 @@ func TestSupplementalARM64MnemonicRejectsNearbyUnallocatedEncodings(t *testing.T
 	}
 }
 
-func TestDecryptUniversalSliceUsesAbsolutePageOffsets(t *testing.T) {
+func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
 	blob, layout := signedAuditFixture(t, pageBytes, 2*pageBytes, 12, 2)
 	layout.cpuType = cpuTypeARM64
 	layout.cryptID = 1
@@ -64,7 +64,7 @@ func TestDecryptUniversalSliceUsesAbsolutePageOffsets(t *testing.T) {
 	for page := range records {
 		key := deriver.pageKey(
 			records[page][:16],
-			image.sliceOffset+uint64(layout.cryptOffset)+uint64(page*pageBytes),
+			image.sliceOffset+uint64(layout.cryptOffset),
 		)
 		block, err := aes.NewCipher(key[:])
 		if err != nil {
@@ -92,7 +92,7 @@ func TestDecryptUniversalSliceUsesAbsolutePageOffsets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(blob[pageBytes:3*pageBytes], plaintext) {
-		t.Fatal("universal slice did not decrypt with each absolute page offset")
+		t.Fatal("universal slice did not decrypt with its encrypted-region offset")
 	}
 	if report.EncryptedSHA256 != encryptedHash || report.DecryptedSHA256 != digest(blob) {
 		t.Fatalf("unexpected image hashes: %+v", report)

@@ -10,7 +10,8 @@ import (
 func TestReportSeparatesCompletionFromVerification(t *testing.T) {
 	dir := t.TempDir()
 	destination := testFile(t, dir, "report.json", "previous report")
-	name, err := stagePrivateJSON(destination, decryptionReport{Complete: true, ModelBuild: currentSINFModelName})
+	const modelBuild = "test-external-model"
+	name, err := stagePrivateJSON(destination, decryptionReport{Complete: true, ModelBuild: modelBuild})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +25,7 @@ func TestReportSeparatesCompletionFromVerification(t *testing.T) {
 	if err := json.Unmarshal(blob, &report); err != nil {
 		t.Fatal(err)
 	}
-	if report["complete"] != true || report["plaintext_verified"] != false || report["signature_verified"] != false || report["model_build"] != currentSINFModelName {
+	if report["complete"] != true || report["plaintext_verified"] != false || report["signature_verified"] != false || report["model_build"] != modelBuild {
 		t.Fatalf("ambiguous report: %s", blob)
 	}
 	if checkPlatform() == nil {

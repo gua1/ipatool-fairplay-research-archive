@@ -58,9 +58,6 @@ func pathsAlias(left, right string) bool {
 
 func validatePaths(options DecryptOptions) (DecryptOptions, error) {
 	inputs := []*string{&options.InputPath}
-	if options.ModelPath != "" {
-		inputs = append(inputs, &options.ModelPath)
-	}
 	for _, name := range inputs {
 		resolved, err := canonicalPath(*name)
 		if err != nil {
@@ -74,6 +71,21 @@ func validatePaths(options DecryptOptions) (DecryptOptions, error) {
 			return options, fmt.Errorf("FairPlay input must be a regular file: %s", resolved)
 		}
 		*name = resolved
+	}
+	if options.ModelPath != "" {
+		resolved, err := canonicalPath(options.ModelPath)
+		if err != nil {
+			return options, err
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return options, err
+		}
+		if !info.Mode().IsRegular() && !info.IsDir() {
+			return options, fmt.Errorf("FairPlay enrollment model must be a regular file or directory: %s", resolved)
+		}
+		options.ModelPath = resolved
+		inputs = append(inputs, &options.ModelPath)
 	}
 	for _, name := range []*string{&options.OutputPath, &options.ReportPath} {
 		info, err := os.Lstat(*name)

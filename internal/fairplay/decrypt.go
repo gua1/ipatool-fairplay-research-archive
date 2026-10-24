@@ -306,7 +306,7 @@ func decryptPagesInPlace(output []byte, image encryptedImage, records [][32]byte
 			for index := first; index < len(records); index += workers {
 				record := records[index]
 				key := deriver.pageKey(
-					record[:16], image.sliceOffset+uint64(image.layout.cryptOffset)+uint64(index*pageBytes),
+					record[:16], image.sliceOffset+uint64(image.layout.cryptOffset),
 				)
 				keys[index] = key
 				block, _ := aes.NewCipher(key[:])
@@ -480,18 +480,21 @@ func DecryptIPA(options DecryptOptions) (DecryptResult, error) {
 		if statErr != nil {
 			return result, fmt.Errorf("inspect FairPlay enrollment model: %w", statErr)
 		}
-		if !modelInfo.Mode().IsRegular() {
-			return result, fmt.Errorf("FairPlay enrollment model is not a regular file")
+		if modelInfo.IsDir() {
+			modelPacks, readErr := readEnrollmentModelRegistry(options.ModelPath)
+			if readErr != nil {
+				return result, readErr
+			}
+			defer clearModelPacks(modelPacks)
+			material, err = ResolveLogicalKeyWithModels(sinf, modelPacks)
+		} else {
+			modelPack, readErr := readEnrollmentModel(options.ModelPath)
+			if readErr != nil {
+				return result, readErr
+			}
+			defer clear(modelPack)
+			material, err = ResolveLogicalKeyWithModel(sinf, modelPack)
 		}
-		if modelInfo.Mode().Perm()&0o077 != 0 {
-			return result, fmt.Errorf("FairPlay enrollment model must not be accessible by group or other users")
-		}
-		modelPack, readErr := os.ReadFile(options.ModelPath)
-		if readErr != nil {
-			return result, fmt.Errorf("read FairPlay enrollment model: %w", readErr)
-		}
-		defer clear(modelPack)
-		material, err = ResolveLogicalKeyWithModel(sinf, modelPack)
 	}
 	if err != nil {
 		return result, err
