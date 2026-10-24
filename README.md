@@ -46,7 +46,9 @@ Available Commands:
   auth                 Authenticate with the App Store
   completion           Generate the autocompletion script for the specified shell
   download             Download iOS, iPadOS, tvOS, watchOS, visionOS, and macOS app packages from the App Store
+  fairplay-doctor      Diagnose FairPlay build, enrollment, SINF, and model compatibility
   fairplay-decrypt     Decrypt a personalized IPA using the portable FairPlay pipeline
+  fairplay-enroll      Collect and recover private native FairPlay enrollment
   get-version-metadata Retrieves the metadata for a specific version of an app
   help                 Help about any command
   list-purchases       List apps owned by the authenticated App Store account
@@ -83,17 +85,17 @@ supported, even when their IPA uses the modern SINF layout. A new account is a
 requirement, not a guarantee: the recovered model must still match the SINF
 selector in the downloaded IPA.
 
-| FairPlay build | Recovery status | End-to-end IPA status |
+| Host/FairPlay profile | Recovery status | End-to-end IPA status |
 | --- | --- | --- |
-| `26A428` | Supported by the `macos26a428` Go profile | Proven with a modern account and matching selector |
-| `26B118` | Go evaluator and AES recovery are validated | Research-only; the retained older-account enrollment did not produce the correct IPA key |
-| Any other build, including `26A434` | Unsupported | A new evaluator and differential validation are required |
+| macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the `macos26a428` binary profile | Proven with a modern account and matching selector |
+| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Go evaluator and AES recovery are validated | Research-only; the retained older-account enrollment did not produce the correct IPA key |
+| Any other fairplayd arm64e hash | Unsupported | A new evaluator and differential validation are required |
 
-The exact build number matters more than the macOS marketing version. Run
-`sw_vers -buildVersion` and compare the complete value. In particular, do not
-assume every macOS 27.0 or 27.0.1 installation contains the checked `26A428`
-FairPlay binary. The recovery pipeline also verifies the complete fairplayd
-SHA-256 and rejects a different binary.
+The fairplayd arm64e slice hash is authoritative. The macOS host build and the
+internal FairPlay binary profile do not always have the same build label: the
+validated macOS `26A434` installation contains the checked `26A428` fairplayd
+slice. `fairplay-doctor` computes the exact slice hash and rejects a different
+binary instead of guessing from the marketing version.
 
 The experimental `fairplay-decrypt` command currently runs only on macOS and
 Linux because it enforces Unix private-file permissions. The standalone Go
@@ -199,11 +201,11 @@ enrollment. The bounded trace pipeline can then capture the white-box entry,
 generate the private oracle model, run `tools/fairplay-recovery`, and package
 the result as `fairplay-enrollment.bin`.
 
-Checkpoint acquisition is **not yet a turnkey ipatool command**. It is still a
-build-specific research step and requires the matching trace tooling. The Go
-recovery command starts after that snapshot exists; it cannot reconstruct
-missing enrollment state from only an IPA, SINF, SIDB, MAC address, or Apple
-Account password.
+The supported profile now constructs its checkpoint offline through
+`fairplay-enroll recover`; it does not attach to the live fairplayd process.
+Recovery still cannot reconstruct missing enrollment from only an IPA, SINF,
+SIDB, MAC address, or Apple Account password—the complete capture bundle is
+required.
 
 The resulting `fairplay-enrollment.bin` is normally reusable for IPAs
 personalized to the same account enrollment and selector. Generate a new one
@@ -234,42 +236,54 @@ model: both contain private account-derived key material.
    not perform this step.
 
 4. Keep the account signed in and do not delete `SC Info`, reinstall macOS, or
-   reset the App Store state. Preserve the installed app's `SC_Info/*.sinf` and
-   obtain an encrypted IPA personalized to the same Apple Account. The IPA and
-   installed SINF must report the same account/profile selector.
-
-5. Run the exact-build capture tooling while fairplayd processes that installed
-   app. For the checked `26A428` profile, the packaged pipeline accepts an
-   account-loop checkpoint at `0x10057ae74` or a selected-record checkpoint at
-   `0x1005cba90`. This capture step is currently lab tooling, not a command in
-   the public ipatool binary.
-
-6. From the research workspace, run the packaged recovery and validation:
+   reset the App Store state. Obtain an encrypted IPA personalized to the same
+   Apple Account. Then collect the installed app, exact fairplayd slice,
+   hardware identity, SC Info/ADI state, SINF/SUPFs, and IPA into one private
+   bundle. Reading `/private/var/db/fpsd` normally requires `sudo`; the command
+   restores ownership to the invoking user when run through sudo:
 
    ```shell
-   python3 analysis/run_portable_fairplay_pipeline.py \
-     --recovery-profile macos26a428 \
-     --entry-checkpoint /private/path/account-entry.checkpoint.pkl.gz \
-     --sinf /private/path/App.sinf \
+   sudo ipatool fairplay-enroll collect \
+     --app /Applications/App.app \
      --ipa /private/path/App.ipa \
-     --output-dir /private/path/App-recovery
+     --output /private/path/App.capture
    ```
 
-   The pipeline derives the internal checkpoints, verifies the Go oracle
-   against the reference trace, performs the Go AES recovery, writes
-   `fairplay-enrollment.bin`, decrypts the supplied IPA, and verifies every
-   encrypted Mach-O and available CodeDirectory page hash. Do not accept a
-   model from a failed or incomplete validation run.
+5. Inspect the bundle before recovery. The report contains hashes and geometry,
+   not passwords or plaintext keys:
+
+   ```shell
+   ipatool fairplay-doctor \
+     --capture /private/path/App.capture \
+     --report /private/path/App.doctor.json
+   ```
+
+6. From the ipatool source tree, install `uv` and the Go toolchain, then run the
+   offline checkpoint constructor and recovery pipeline:
+
+   ```shell
+   ipatool fairplay-enroll recover \
+     --capture /private/path/App.capture \
+     --output /private/path/App.recovery
+   ```
+
+   This executes the build-specific static trace, derives the internal
+   checkpoints, validates the generated Go oracle, performs the Go AES
+   recovery, writes `fairplay-enrollment.bin`, decrypts the captured IPA, and
+   verifies every encrypted Mach-O and available CodeDirectory page hash. It
+   can take several minutes because checkpoint construction is intentionally
+   offline and conservative. Do not accept a model from a failed or incomplete
+   validation run.
 
 7. Store the recovered model privately and reuse it for another IPA from the
    same enrollment and selector:
 
    ```shell
-   chmod 600 /private/path/App-recovery/fairplay-enrollment.bin
+   chmod 600 /private/path/App.recovery/fairplay-enrollment.bin
 
    ipatool fairplay-decrypt \
      --input AnotherApp.ipa \
-     --model /private/path/App-recovery/fairplay-enrollment.bin
+     --model /private/path/App.recovery/fairplay-enrollment.bin
    ```
 
    Or decrypt immediately after a same-account download:
@@ -279,7 +293,7 @@ model: both contain private account-derived key material.
      --app-id APP_ID \
      --purchase \
      --fairplay-decrypt \
-     --fairplay-model /private/path/App-recovery/fairplay-enrollment.bin
+     --fairplay-model /private/path/App.recovery/fairplay-enrollment.bin
    ```
 
 8. Check the private JSON report. Success requires every previously encrypted

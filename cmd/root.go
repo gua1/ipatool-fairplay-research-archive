@@ -54,6 +54,8 @@ func rootCmd() *cobra.Command {
 	cmd.AddCommand(getVersionMetadataCmd())
 	cmd.AddCommand(mcpCmd())
 	cmd.AddCommand(fairplayDecryptCmd())
+	cmd.AddCommand(fairplayEnrollCmd())
+	cmd.AddCommand(fairplayDoctorCmd())
 
 	return cmd
 }

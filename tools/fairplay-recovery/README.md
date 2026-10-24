@@ -24,7 +24,7 @@ automatic fault-discovery features.
 
 | Profile | Status |
 | --- | --- |
-| `26A428` (`-tags fairplay26a428`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
+| `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
 | `26B118` (default build) | Oracle and AES recovery proven; end-to-end provisioning remains research-only |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
@@ -43,15 +43,42 @@ generic model for every user, and another person's model must not be reused.
 Before capture, the fresh Apple Account must have completed native App Store
 setup and a free app must have been installed and opened through the Mac App
 Store. Downloading only through ipatool does not initialize the same native
-enrollment. Capture itself is still performed by the external build-specific
-trace pipeline; this Go tool consumes its output and does not attach to
-fairplayd or provision an account.
+enrollment. `ipatool fairplay-enroll collect` creates the private bundle and
+`fairplay-enroll recover` runs the packaged offline trace. Neither command
+attaches to the live fairplayd process or provisions an Apple Account.
 
 The recovered enrollment pack can be reused for matching IPAs while the
 account enrollment and SINF selector remain unchanged. Recapture after an
 enrollment reset, selector change, or when recovering from another fairplayd
 build. Treat the checkpoint, oracle model, recovered JSON, and final enrollment
 pack as private secrets.
+
+## Normal workflow
+
+Run the public commands from the ipatool source tree:
+
+```sh
+sudo ipatool fairplay-enroll collect \
+  --app /Applications/App.app \
+  --ipa /private/path/App.ipa \
+  --output /private/path/App.capture
+
+ipatool fairplay-doctor --capture /private/path/App.capture
+
+ipatool fairplay-enroll recover \
+  --capture /private/path/App.capture \
+  --output /private/path/App.recovery
+```
+
+The recover command uses the Python tools in `python/`, the sanitized
+account-independent startup state in `profiles/`, and the Go evaluator in this
+directory. It requires `uv` and a Go toolchain. The capture and recovery output
+directories are private and must not already exist.
+
+The packaged startup profile initializes only deterministic build state. Its
+contents and privacy boundary are documented in `profiles/README.md`; all
+account, license, SIDB, hardware, and IPA inputs come from the private capture
+at runtime.
 
 ## Generate
 
