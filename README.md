@@ -46,6 +46,7 @@ Available Commands:
   auth                 Authenticate with the App Store
   completion           Generate the autocompletion script for the specified shell
   download             Download iOS, iPadOS, tvOS, watchOS, visionOS, and macOS app packages from the App Store
+  fairplay-decrypt     Decrypt a personalized IPA using the portable FairPlay pipeline
   get-version-metadata Retrieves the metadata for a specific version of an app
   help                 Help about any command
   list-purchases       List apps owned by the authenticated App Store account
@@ -93,6 +94,91 @@ The exact build number matters more than the macOS marketing version. Run
 assume every macOS 27.0 or 27.0.1 installation contains the checked `26A428`
 FairPlay binary. The recovery pipeline also verifies the complete fairplayd
 SHA-256 and rejects a different binary.
+
+The experimental `fairplay-decrypt` command currently runs only on macOS and
+Linux because it enforces Unix private-file permissions. The standalone Go
+recovery helper can be cross-compiled for Windows, but the final ipatool
+decryption command intentionally rejects Windows for now.
+
+#### Quick usage with an existing model
+
+Decrypting an existing personalized IPA is offline once the matching model is
+available; it does not require an App Store login or network connection:
+
+```shell
+chmod 600 fairplay-enrollment.bin
+
+ipatool fairplay-decrypt \
+  --input App.ipa \
+  --model fairplay-enrollment.bin \
+  --output App.decrypted.ipa \
+  --report App.decrypted.json
+```
+
+To download another personalized IPA, first authenticate the same Apple
+Account whose enrollment produced the model:
+
+```shell
+ipatool auth login
+```
+
+Then purchase when necessary, download, and decrypt in one command:
+
+```shell
+ipatool download \
+  --app-id APP_ID \
+  --purchase \
+  --output App.ipa \
+  --fairplay-decrypt \
+  --fairplay-model fairplay-enrollment.bin \
+  --fairplay-output App.decrypted.ipa \
+  --fairplay-report App.decrypted.json
+```
+
+For scripts, request machine-readable command output while keeping the private
+decryption report in its own file:
+
+```shell
+ipatool --format json fairplay-decrypt \
+  --input App.ipa \
+  --model fairplay-enrollment.bin \
+  --report App.decrypted.json
+```
+
+The model may be either one `.bin` file or a private directory containing up
+to 256 selector-bound `.bin` models. Directory mode is useful for several
+accounts because ipatool reads the IPA selector and chooses the matching model:
+
+```shell
+mkdir -m 700 fairplay-models
+install -m 600 Account-A.bin fairplay-models/
+install -m 600 Account-B.bin fairplay-models/
+
+ipatool fairplay-decrypt \
+  --input App.ipa \
+  --model fairplay-models
+```
+
+Model directories must be mode `0700` or stricter, and every model must be
+mode `0600` or stricter. Symlinks are rejected. Files without a `.bin`
+extension are ignored.
+
+Unless explicit paths are supplied, `App.ipa` produces
+`App.decrypted.ipa` and `App.decrypted.json` beside the input. Existing output
+or report files are never replaced unless `--force` is passed (or
+`--fairplay-force` on `download`). A successful run still leaves the original
+encrypted IPA unchanged.
+
+Common failures are intentional fail-closed checks:
+
+- `requires a private enrollment model`: pass `--model FILE` or
+  `--model DIRECTORY`;
+- `unsupported FairPlay profile`: the account/SINF selector does not match the
+  selected model;
+- a fairplayd build/hash mismatch: use the exact supported recovery profile;
+- a permission error: remove group/other access with `chmod 600 MODEL` and
+  `chmod 700 MODEL_DIRECTORY`;
+- an existing-output error: choose another path or explicitly pass `--force`.
 
 #### What “generate a matching checkpoint once” means
 
@@ -257,6 +343,10 @@ codes, cookies, and Store authentication tokens are not written.
 
 The captured blobs are personalized material. Share the directory privately;
 do not attach it to a public issue.
+
+`--fairplay-capture-dir` is a Store transaction diagnostic. It does not create
+the native fairplayd checkpoint or `fairplay-enrollment.bin`, and it cannot
+replace the enrollment/recovery workflow above.
 
 ### MCP tools
 
