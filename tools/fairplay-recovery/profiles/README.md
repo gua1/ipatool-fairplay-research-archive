@@ -1,8 +1,16 @@
 # Packaged startup profiles
 
-`macos26a428-startup.json.gz` is the account-independent fairplayd startup
-overlay for the checked arm64e binary with SHA-256
-`1e58d37e9602dd0ca5e24b14762063b6c310248b4d3a94272771d815e4ea1784`.
+The packaged account-independent fairplayd startup overlays are:
+
+- `macos26a428-startup.json.gz` for arm64e SHA-256
+  `1e58d37e9602dd0ca5e24b14762063b6c310248b4d3a94272771d815e4ea1784`;
+- `macos26b118-startup.json.gz` for arm64e SHA-256
+  `f68e4407e90af5466d2766e1b1c4637260d08cb0518f991e1797ac6c4964439d`.
+
+The canonical compressed profile SHA-256 values are
+`ae76565e...e0bca9e` (26A428) and `ed03021a...7c0b43` (26B118). Tests reject
+unknown fields, digest changes, unsorted/duplicate addresses, non-byte memory
+values, or changed once-token geometry.
 
 It contains only:
 

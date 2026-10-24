@@ -88,7 +88,7 @@ selector in the downloaded IPA.
 | Host/FairPlay profile | Recovery status | End-to-end IPA status |
 | --- | --- | --- |
 | macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the `macos26a428` binary profile | Proven with a modern account and matching selector |
-| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Go evaluator and AES recovery are validated | Research-only; the retained older-account enrollment did not produce the correct IPA key |
+| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Capture-to-checkpoint, Go oracle, AES recovery, and `FPSENR3` construction are ported | Not yet supported for IPA decryption; the exact fresh-account control rejects the downloaded Windows-profile SINF |
 | Any other fairplayd arm64e hash | Unsupported | A new evaluator and differential validation are required |
 
 The fairplayd arm64e slice hash is authoritative. The macOS host build and the
@@ -201,11 +201,24 @@ enrollment. The bounded trace pipeline can then capture the white-box entry,
 generate the private oracle model, run `tools/fairplay-recovery`, and package
 the result as `fairplay-enrollment.bin`.
 
-The supported profile now constructs its checkpoint offline through
+The checked profiles now construct their checkpoints offline through
 `fairplay-enroll recover`; it does not attach to the live fairplayd process.
 Recovery still cannot reconstruct missing enrollment from only an IPA, SINF,
 SIDB, MAC address, or Apple Account password—the complete capture bundle is
 required.
+
+The 26B118 path additionally proves every intermediate checkpoint address.
+It stops at the first enrollment mismatch instead of advancing a failed
+checkpoint to a later address. Until a recovered 26B118 candidate passes the
+final IPA and CodeDirectory checks, `fairplay-doctor` reports the build as
+`recovery-supported`, not end-to-end proven.
+
+The retained fresh-account 26B118 control reaches every natural boundary,
+matches the Go oracle in all 144 differential cases, and reproduces the prior
+`FPSENR3` model. Its Windows-profile downloaded IPA still rejects that model,
+so the command leaves only an explicitly named candidate and exits with an
+error. This is a remaining profile/consumer boundary, not an AES-recovery
+failure.
 
 The resulting `fairplay-enrollment.bin` is normally reusable for IPAs
 personalized to the same account enrollment and selector. Generate a new one

@@ -42,7 +42,7 @@ var supportedFairPlayHashes = map[string]FairPlayBuildSupport{
 		Profile: "macos26a428", Build: "26A428", Status: "supported", Recovery: true, Decrypt: true,
 	},
 	FairPlayBuild26B118Hash: {
-		Profile: "macos26b118", Build: "26B118", Status: "research-only", Recovery: true, Decrypt: false,
+		Profile: "macos26b118", Build: "26B118", Status: "recovery-supported", Recovery: true, Decrypt: false,
 	},
 }
 
@@ -61,6 +61,7 @@ type EnrollmentCaptureFile struct {
 type EnrollmentCaptureApp struct {
 	BundleIdentifier string       `json:"bundle_identifier"`
 	Executable       string       `json:"executable"`
+	ExecutablePath   string       `json:"executable_path,omitempty"`
 	Selector         SINFSelector `json:"selector"`
 	SelectorID       string       `json:"selector_id"`
 	SINFPath         string       `json:"sinf_path"`
@@ -660,7 +661,8 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 		FairPlayd: fairplayd, FairPlay: support, HardwareMAC: hardware,
 		App: EnrollmentCaptureApp{
 			BundleIdentifier: metadata.BundleIdentifier, Executable: metadata.Executable,
-			Selector: selector, SelectorID: selector.Identifier(),
+			ExecutablePath: filepath.Join(app, metadata.Executable),
+			Selector:       selector, SelectorID: selector.Identifier(),
 			SINFPath:       filepath.ToSlash(filepath.Join("app", "SC_Info", filepath.Base(sinfPath))),
 			TargetSINFPath: targetSINFPath,
 			IPAMemberRoot:  ipaRoot,

@@ -72,6 +72,17 @@ func TestInspectSINFAndModel(t *testing.T) {
 	}
 }
 
+func TestFairPlayBuildRecoverySupport(t *testing.T) {
+	stable, ok := LookupFairPlayBuild(FairPlayBuild26A428Hash)
+	if !ok || !stable.Recovery || !stable.Decrypt {
+		t.Fatalf("26A428 support = %#v, %v", stable, ok)
+	}
+	research, ok := LookupFairPlayBuild(FairPlayBuild26B118Hash)
+	if !ok || !research.Recovery || research.Decrypt || research.Status != "recovery-supported" {
+		t.Fatalf("26B118 support = %#v, %v", research, ok)
+	}
+}
+
 func TestLoadEnrollmentCaptureIntegrity(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "capture")
 	if err := os.Mkdir(directory, 0o700); err != nil {

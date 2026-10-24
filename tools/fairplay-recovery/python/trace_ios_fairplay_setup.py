@@ -78,6 +78,18 @@ DAEMON_BUILD_PROFILES: dict[str, dict[str, Any]] = {
             "artifacts/fairplay/cache/fairplayd-macos-26A428-startup-v1.json"
         ),
     },
+    "macos-26B118": {
+        "binary": Path("artifacts/fairplay/fairplayd-arm64e-macos-26B118"),
+        "main": 0x100413BB4,
+        "setup_impl": 0x100422D48,
+        "request_token": 0x123,
+        "product_id": b"",
+        "iokit_version": 0x48130000,
+        "iokit_capabilities": 0x1F8,
+        "startup_cache": Path(
+            "artifacts/fairplay/cache/fairplayd-macos-26B118-startup-v1.json"
+        ),
+    },
     "ios-23E246": {
         "binary": Path("artifacts/fairplay/fairplayd-ios-23E246"),
         "main": MAIN,
@@ -2216,6 +2228,7 @@ def main() -> None:
     if args.fairplay_iokit_profile is None:
         args.fairplay_iokit_profile = {
             "macos-26A428": "macos-26A428",
+            "macos-26B118": "macos-26B118",
             "ios18-22G100": "ios18-22G100",
             "ios-23E246": "ios-23E246",
         }[args.daemon_profile]

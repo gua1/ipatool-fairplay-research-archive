@@ -247,7 +247,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 	if capturePath == "" {
 		if host, err := InspectLocalFairPlayHost(); err == nil {
 			report.Host = &host
-			report.Checks["supported_fairplayd"] = host.FairPlaySupport.Status == "supported"
+			report.Checks["supported_fairplayd"] = host.FairPlaySupport.Recovery
 			report.Checks["native_state_accessible"] = host.StateAccessible && host.StateFiles != 0
 			report.Checks["hardware_iomac"] = host.HardwareMACPresent
 		} else if ipaPath == "" && modelPath == "" {
@@ -271,7 +271,10 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			}
 			report.CaptureVerified = true
 			report.Checks["capture_integrity"] = true
-			report.Checks["supported_fairplayd"] = capture.FairPlay.Status == "supported"
+			report.Checks["supported_fairplayd"] = capture.FairPlay.Recovery
+			if !capture.FairPlay.Decrypt {
+				report.Warnings = append(report.Warnings, "this exact build has recovery tooling but is not supported for IPA decryption; the known downloaded Windows-profile SINF remains incompatible, and recovery is accepted only if the matching IPA fully decrypts and verifies")
+			}
 			if ipaPath == "" && capture.IPA != nil {
 				resolved, resolveErr := captureFilePath(capturePath, capture.IPA.Path)
 				if resolveErr != nil {
@@ -343,7 +346,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			report.NextActions = append(report.NextActions, "rerun collection with permission to read /private/var/db/fpsd")
 		}
 		report.NextActions = append(report.NextActions, "collect native enrollment with fairplay-enroll collect")
-	} else if captureManifest.FairPlay.Status != "supported" {
+	} else if !captureManifest.FairPlay.Recovery {
 		report.NextActions = append(report.NextActions, "add and validate an exact evaluator for this fairplayd hash")
 	} else if modelPath == "" {
 		report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover")
