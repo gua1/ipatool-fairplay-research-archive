@@ -61,11 +61,16 @@ func main() {
 	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "parallel oracle workers")
 	recoveryOutput := flag.String("recover-output", "", "recover the AES model in-process and write private JSON")
 	flag.Parse()
-	if *modelPath == "" {
+	var value *model
+	var err error
+	if *modelPath != "" {
+		value, err = loadModel(*modelPath)
+	} else if embedded := embeddedModelBytes(); len(embedded) != 0 {
+		value, err = loadModelBytes(embedded)
+	} else {
 		fmt.Fprintln(os.Stderr, "missing --model")
 		os.Exit(2)
 	}
-	value, err := loadModel(*modelPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

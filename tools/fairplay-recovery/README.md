@@ -27,6 +27,7 @@ automatic fault-discovery features.
 | `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
 | `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery proven for two independent enrollments; the preceding enrollment-frame producer is still research-only |
+| `26A428` frame evaluator (`-tags fairplayframe`) | Pure-Go direct evaluator with an embedded sanitized build model; exact across two independent enrollment inputs |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
 Only modern App Store enrollments from newly created Apple Accounts are in
@@ -217,6 +218,33 @@ its private entry model still needs the enrollment-bound frame at selected
 object offset `+0x724`. Until that producer is expressed directly, the public
 capture-to-model command continues to use the checked offline trace. Do not
 ship a recovered SIDB key as a build-global constant.
+
+### Enrollment-frame evaluator
+
+The `fairplayframe` tag selects the direct 26A428 evaluator for
+`0x1002fbb24..0x1002ff8d8`. This is the second natural invocation of that
+mixer: the first writes neighboring state at object `+0x744`; the second maps
+the 16-byte block at object `+0x524` to the decoder frame at object `+0x724`.
+Changing the neighboring `+0x744` field has no effect on the recovered SIDB
+AES model.
+
+This evaluator does not need DarkPhoenix or a private oracle model. Its
+embedded `profiles/macos26a428-frame-public.model.gz` contains only fixed
+26A428 code/data, two required internal pointers, and two build-state words.
+The generator zeros the input, output, unused object bytes, and unused stack
+bytes before publication. Tests enforce that allowlist. The same embedded
+model maps both retained enrollments' distinct inputs to their exact native
+frames, so no account key or enrollment secret is hardcoded.
+
+```sh
+go build -tags fairplayframe -o /private/tmp/fairplay-frame \
+  ./tools/fairplay-recovery
+```
+
+The binary currently exposes the repository's batch oracle protocol. It is a
+portable component for the capture-to-model pipeline, not yet a standalone
+end-user command. The remaining upstream task is deriving its 16-byte input
+directly from the captured SIDB state.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

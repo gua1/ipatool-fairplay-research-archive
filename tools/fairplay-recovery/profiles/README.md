@@ -23,6 +23,11 @@ hardware MAC address, password, token, cookie, logical application key, or
 recovered enrollment key. `trace_ios_fairplay_setup.py` verifies the captured
 fairplayd hash before using it.
 
+`macos26a428-frame-public.model.gz` is a separate, sanitized Go-evaluator
+model (SHA-256 `b10da4b2...eba849`). It contains fixed build state only. Its
+account input/output and unused object/stack bytes are zero, and tagged tests
+enforce the exact nonzero-byte allowlist before the model can be used.
+
 The profile is necessary because ordinary offline startup stops at the native
 IOKit boundary before the daemon finishes generating its protected global
 tables. Account-specific state is applied later from the private bundle created

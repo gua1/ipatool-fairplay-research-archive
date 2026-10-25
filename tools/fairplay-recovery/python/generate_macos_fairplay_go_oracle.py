@@ -49,7 +49,10 @@ from raw_macho_db import RawMachODatabase, dyld_info_fixups
 START = 0x100221894
 STOP = 0x100223A30
 BLOCK = 0x710000014EE0
+RESULT_BLOCK = BLOCK
+COPY_RESULT_TO_BLOCK = False
 INSTRUCTION_PATH: tuple[int, ...] | None = None
+MODEL_PAGE_SANITIZER = None
 MAGIC = b"FPGOOR1\x00"
 VERSION = 2
 
@@ -540,7 +543,7 @@ def generate_go(
 
     by_pc = {instruction.address: instruction for instruction in instructions}
     site_rows = []
-    for round_index in (6, 7, 8):
+    for round_index in sorted(FAULT_SITES):
         values = []
         for raw_site in FAULT_SITES[round_index]:
             pc, register, kind, shift = unpack_fault_site(raw_site)
@@ -580,29 +583,49 @@ def generate_go(
         "func generatedFault(meta uint32) (fault, error) {",
         "\tround := uint16(meta & 0xffff)",
         "\tif round == 0xffff { return fault{}, nil }",
-        "\tvar siteRound uint16",
-        "\tswitch round {",
-        "\tcase 9: siteRound = 8",
-        "\tcase 8: siteRound = 7",
-        "\tcase 6, 7: siteRound = 6",
-        "\tdefault: return fault{}, fmt.Errorf(\"unsupported oracle fault round=%d\", round)",
-        "\t}",
-        "\tbyteIndex := uint8(meta >> 16)",
-        "\txorValue := uint8(meta >> 24)",
-        "\tsites, ok := generatedFaultSites[siteRound]",
-        "\tif !ok || byteIndex >= 16 || xorValue == 0 { return fault{}, fmt.Errorf(\"unsupported oracle fault round=%d byte=%d xor=%d\", round, byteIndex, xorValue) }",
-        "\tresult := sites[byteIndex]",
-        "\tresult.value = xorValue",
-        "\treturn result, nil",
-        "}",
-        "",
-        helper_source(),
-        "func runGenerated(s *state, selected fault) error {",
     ])
+    if not FAULT_SITES:
+        lines.extend([
+            "\treturn fault{}, fmt.Errorf(\"this evaluator does not expose fault sites\")",
+            "}",
+            "",
+            helper_source(),
+            "func runGenerated(s *state, selected fault) error {",
+        ])
+    else:
+        lines.extend([
+            "\tvar siteRound uint16",
+            "\tswitch round {",
+            "\tcase 9: siteRound = 8",
+            "\tcase 8: siteRound = 7",
+            "\tcase 6, 7: siteRound = 6",
+            "\tdefault: return fault{}, fmt.Errorf(\"unsupported oracle fault round=%d\", round)",
+            "\t}",
+            "\tbyteIndex := uint8(meta >> 16)",
+            "\txorValue := uint8(meta >> 24)",
+            "\tsites, ok := generatedFaultSites[siteRound]",
+            "\tif !ok || byteIndex >= 16 || xorValue == 0 { return fault{}, fmt.Errorf(\"unsupported oracle fault round=%d byte=%d xor=%d\", round, byteIndex, xorValue) }",
+            "\tresult := sites[byteIndex]",
+            "\tresult.value = xorValue",
+            "\treturn result, nil",
+            "}",
+            "",
+            helper_source(),
+            "func runGenerated(s *state, selected fault) error {",
+        ])
     for ordinal, instruction in enumerate(instructions):
         lines.append(f"\t// {instruction.address:#x}: {instruction.mnemonic} {instruction.op_str}")
         for statement in emit_instruction(disassembler, instruction, ordinal):
             lines.append("\t" + statement)
+    if COPY_RESULT_TO_BLOCK and RESULT_BLOCK != BLOCK:
+        for offset in range(16):
+            lines.extend(
+                [
+                    f"\tresultByte{offset}, err := s.load({RESULT_BLOCK + offset:#x}, 1)",
+                    "\tif err != nil { return err }",
+                    f"\tif err := s.storeValue({BLOCK + offset:#x}, resultByte{offset}, 1); err != nil {{ return err }}",
+                ]
+            )
     lines.extend(["\treturn nil", "}", ""])
     return "\n".join(lines)
 
@@ -684,6 +707,10 @@ def write_private_model(
                     data = page_from_image(database, address)
                 if not isinstance(data, bytes) or len(data) != 0x1000:
                     raise ValueError(f"invalid model page {address:#x}")
+                if MODEL_PAGE_SANITIZER is not None:
+                    data = MODEL_PAGE_SANITIZER(address, data)
+                    if not isinstance(data, bytes) or len(data) != 0x1000:
+                        raise ValueError(f"invalid sanitized model page {address:#x}")
                 output.write(struct.pack("<Q", address))
                 output.write(data)
             output.write(struct.pack("<I", len(domains)))

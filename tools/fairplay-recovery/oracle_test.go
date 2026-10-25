@@ -8,6 +8,9 @@ import (
 )
 
 func TestGeneratedFaultMapping(t *testing.T) {
+	if len(generatedFaultSites) == 0 {
+		return
+	}
 	for protocolRound, siteRound := range map[uint16]uint16{6: 6, 7: 6, 8: 7, 9: 8} {
 		value, err := generatedFault(uint32(protocolRound) | 3<<16 | 7<<24)
 		if err != nil {

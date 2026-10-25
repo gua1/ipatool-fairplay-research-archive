@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
@@ -48,7 +49,15 @@ func loadModel(path string) (*model, error) {
 		return nil, err
 	}
 	defer file.Close()
-	stream, err := gzip.NewReader(file)
+	return loadModelReader(file)
+}
+
+func loadModelBytes(data []byte) (*model, error) {
+	return loadModelReader(bytes.NewReader(data))
+}
+
+func loadModelReader(input io.Reader) (*model, error) {
+	stream, err := gzip.NewReader(input)
 	if err != nil {
 		return nil, err
 	}
