@@ -48,7 +48,9 @@ type CanonicalEnrollmentInput struct {
 	FingerprintSHA256 string                    `json:"fingerprint_sha256"`
 	Selector          SINFSelector              `json:"selector"`
 	SelectorID        string                    `json:"selector_id"`
+	ExecutableName    string                    `json:"executable_name"`
 	InstalledSINF     SINFDiagnostic            `json:"installed_sinf"`
+	InstalledSINFFile CanonicalEnrollmentFile   `json:"installed_sinf_file"`
 	TargetSINF        *SINFDiagnostic           `json:"target_sinf,omitempty"`
 	Executable        CanonicalEnrollmentFile   `json:"executable"`
 	Hardware          CanonicalEnrollmentFile   `json:"hardware"`
@@ -136,10 +138,52 @@ func canonicalInputFingerprint(input CanonicalEnrollmentInput) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+func (input CanonicalEnrollmentInput) PrivateExecutablePath() string {
+	return input.Executable.localPath
+}
+func (input CanonicalEnrollmentInput) PrivateHardwarePath() string { return input.Hardware.localPath }
+
+func (input CanonicalEnrollmentInput) RuntimeFileMappings(expanded bool) ([]string, int) {
+	var mappings []string
+	stateFiles := 0
+	appendFile := func(file CanonicalEnrollmentFile, state bool) {
+		if file.VirtualPath == "" || file.localPath == "" {
+			return
+		}
+		mappings = append(mappings, file.VirtualPath+"="+file.localPath)
+		if state {
+			stateFiles++
+		}
+	}
+	appendFile(input.InstalledSINFFile, false)
+	for _, value := range input.SUPFs {
+		name := filepath.Base(value.File.VirtualPath)
+		if expanded || name == input.ExecutableName+".supf" || name == input.ExecutableName+".v5.supf" {
+			appendFile(value.File, false)
+		}
+	}
+	if expanded {
+		for _, value := range input.AuxiliaryLicenses {
+			appendFile(value, false)
+		}
+	}
+	for _, value := range input.SIDBs {
+		appendFile(value.File, true)
+	}
+	for _, value := range input.StateFiles {
+		name := filepath.Base(value.VirtualPath)
+		if expanded || value.Role == "fpsd-state" && strings.HasPrefix(name, "SC Info.") {
+			appendFile(value, true)
+		}
+	}
+	sort.Strings(mappings)
+	return mappings, stateFiles
+}
+
 func NormalizeEnrollmentCapture(capturePath string, manifest EnrollmentCaptureManifest) (CanonicalEnrollmentInput, error) {
 	result := CanonicalEnrollmentInput{
 		Schema: CanonicalEnrollmentInputSchema, Contract: "macos-current-sinf-v1",
-		Selector: manifest.App.Selector, SelectorID: manifest.App.SelectorID,
+		Selector: manifest.App.Selector, SelectorID: manifest.App.SelectorID, ExecutableName: manifest.App.Executable,
 	}
 	files := make(map[string]EnrollmentCaptureFile, len(manifest.Files))
 	for _, file := range manifest.Files {
@@ -188,6 +232,7 @@ func NormalizeEnrollmentCapture(capturePath string, manifest EnrollmentCaptureMa
 	if !result.InstalledSINF.CurrentLayout {
 		return result, fmt.Errorf("installed SINF does not use the current layout")
 	}
+	result.InstalledSINFFile = installedFile
 	if manifest.App.TargetSINFPath != "" {
 		targetDescriptor, exists := files[filepath.ToSlash(manifest.App.TargetSINFPath)]
 		if !exists {

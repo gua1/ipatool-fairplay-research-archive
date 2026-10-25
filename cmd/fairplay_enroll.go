@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/majd/ipatool/v2/internal/fairplay"
 	"github.com/spf13/cobra"
@@ -154,59 +151,6 @@ func privateRecoveryFile(path string, value []byte) error {
 	return err
 }
 
-func portableCaptureFileMappings(capture string, manifest fairplay.EnrollmentCaptureManifest, expanded bool) ([]string, int) {
-	type route struct {
-		capturePrefix string
-		virtualPrefix string
-		state         bool
-	}
-	routes := []route{
-		{"app/SC_Info/", "", false},
-		{"state/fpsd-sc-info/", "/var/db/fpsd/SC Info", true},
-		{"state/shared-sc-info/", "/Users/Shared/SC Info", true},
-		{"state/adi/", "/var/db/fpsd/adi", true},
-	}
-	var mappings []string
-	stateFiles := 0
-	for _, file := range manifest.Files {
-		captured := filepath.ToSlash(file.Path)
-		for _, route := range routes {
-			if !strings.HasPrefix(captured, route.capturePrefix) {
-				continue
-			}
-			relative := strings.TrimPrefix(captured, route.capturePrefix)
-			if relative == "" {
-				continue
-			}
-			if !expanded {
-				name := path.Base(relative)
-				switch route.capturePrefix {
-				case "app/SC_Info/":
-					if name != manifest.App.Executable+".sinf" && name != manifest.App.Executable+".supf" &&
-						name != manifest.App.Executable+".v5.supf" {
-						continue
-					}
-				case "state/fpsd-sc-info/":
-					if !strings.HasPrefix(name, "SC Info.") {
-						continue
-					}
-				default:
-					continue
-				}
-			}
-			suffix := path.Join(route.virtualPrefix, relative)
-			local := filepath.Join(capture, filepath.FromSlash(captured))
-			mappings = append(mappings, suffix+"="+local)
-			if route.state {
-				stateFiles++
-			}
-			break
-		}
-	}
-	sort.Strings(mappings)
-	return mappings, stateFiles
-}
-
 func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverOptions) error {
 	if options.Capture == "" || options.Output == "" {
 		return errors.New("recovery requires capture and output paths")
@@ -276,8 +220,8 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 	arguments := []string{
 		"--raw-source-kernel", "enrollment-sinf",
 		"--raw-source-executable-path", executablePath,
-		"--raw-source-file", "/" + executableName + "=" + capturePath("app/executable"),
-		"--raw-source-mac", capturePath(manifest.HardwareMAC.Path),
+		"--raw-source-file", "/" + executableName + "=" + canonicalInput.PrivateExecutablePath(),
+		"--raw-source-mac", canonicalInput.PrivateHardwarePath(),
 	}
 	candidate := filepath.Join(options.Output, "fairplay-enrollment.candidate.bin")
 	selectedInputProfile := ""
@@ -286,7 +230,7 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 		name     string
 		expanded bool
 	}{{"minimal-current-sinf", false}, {"expanded-capture", true}} {
-		mappings, stateFiles := portableCaptureFileMappings(options.Capture, manifest, profile.expanded)
+		mappings, stateFiles := canonicalInput.RuntimeFileMappings(profile.expanded)
 		if stateFiles == 0 {
 			recoveryErrors = append(recoveryErrors, fmt.Errorf("%s input profile has no FairPlay state files", profile.name))
 			continue
