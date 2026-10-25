@@ -16,8 +16,8 @@ func currentRawSourceBytes(_ int) ([]byte, error) {
 	return nil, fmt.Errorf("raw source state is not included in this build")
 }
 
-func configureRawSourceRuntime(_ *model, _ string, fileSpecs []string, macPath string, stopPC uint64) error {
-	if len(fileSpecs) != 0 || macPath != "" || stopPC != 0 {
+func configureRawSourceRuntime(_ *model, _ string, fileSpecs []string, macPath, executablePath string, stopPC uint64) error {
+	if len(fileSpecs) != 0 || macPath != "" || executablePath != "" || stopPC != 0 {
 		return fmt.Errorf("raw source runtime is not included in this build")
 	}
 	return nil

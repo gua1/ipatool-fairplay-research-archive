@@ -1,4 +1,4 @@
-//go:build !fairplaysidb && !fairplayframe && !fairplaystate
+//go:build !fairplaysidb && !fairplayframe && !fairplaystate && !fairplayrawsource
 
 package main
 

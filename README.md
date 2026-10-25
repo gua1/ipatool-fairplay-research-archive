@@ -366,11 +366,17 @@ parser/file bootstrap and complete source loop are now pure Go too: given a
 private account-entry model and the captured executable, SINF/SUPFs, SIDB, and
 hardware address, they reproduce the native 192/224-byte source exactly.
 
-`fairplay-enroll recover` is not fully Go yet. Its remaining Python/Unicorn
-boundary is the earlier offline construction of that private account-entry
-model from the capture bundle, plus the legacy checkpoint-based packaging and
-differential checks. The final `fairplay-enrollment.bin` remains private in
-every workflow.
+The account-entry constructor is now pure Go as well. A sanitized embedded
+pre-license model accepts the captured executable path, SINF/SUPFs, SIDB,
+executable, and hardware address at runtime and reproduces the native
+192/224-byte source for both modern controls and the preserved older-account
+control. The older source matches without using the iPhone/iOS 16 secret.
+
+`fairplay-enroll recover` still invokes the older Python orchestration for its
+checkpoint-based downstream packaging and differential checks. Moving that
+orchestration onto the new Go source API is the remaining product-integration
+step; it is no longer a missing protected transform. The final
+`fairplay-enrollment.bin` remains private in every workflow.
 
 ### FairPlay enrollment diagnostics
 

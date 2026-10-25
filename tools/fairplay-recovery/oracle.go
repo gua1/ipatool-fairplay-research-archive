@@ -184,10 +184,14 @@ type state struct {
 	writable map[uint64][]byte
 	touched  []uint64
 	dirty    map[uint64]bool
+	accessed map[uint64]bool
 }
 
 func newState(value *model) *state {
-	return &state{model: value, writable: make(map[uint64][]byte), dirty: make(map[uint64]bool)}
+	return &state{
+		model: value, writable: make(map[uint64][]byte),
+		dirty: make(map[uint64]bool), accessed: make(map[uint64]bool),
+	}
 }
 
 func (s *state) reset() {
@@ -196,6 +200,7 @@ func (s *state) reset() {
 		delete(s.dirty, address)
 	}
 	s.touched = s.touched[:0]
+	clear(s.accessed)
 	s.x = s.model.registers
 	s.vectors = [32][16]byte{}
 	s.sp = s.model.sp
@@ -478,6 +483,7 @@ func (s *state) digest() string {
 
 func (s *state) page(address uint64, write bool) ([]byte, error) {
 	base := address &^ (pageSize - 1)
+	s.accessed[base] = true
 	page := s.model.pages[base]
 	if page == nil {
 		return nil, fmt.Errorf("oracle memory address %#x is outside the model", address)
@@ -773,6 +779,13 @@ func unsignedDivide(left, right uint64, width int) uint64 {
 		return 0
 	}
 	return left / right
+}
+
+func countLeadingZeros(value uint64, width int) uint64 {
+	if width == 32 {
+		return uint64(bits.LeadingZeros32(uint32(value)))
+	}
+	return uint64(bits.LeadingZeros64(value))
 }
 
 func (s *state) test32(value uint32) {

@@ -295,9 +295,10 @@ retains only memory bytes read before the evaluator overwrites them.
 ### Raw enrollment-source port
 
 The research-only `fairplayrawsource` build now contains the complete checked
-26A428 path from the private account-entry snapshot to object `+0x304`. It
-includes the parser and file bootstrap, its scalar and SIMD operations, modeled
-POSIX/IOKit calls, and the five hottest repeated writer kernels:
+26A428 path from an account-independent pre-license snapshot to object
+`+0x304`. It includes the SINF/SUPF parser, file bootstrap, scalar and AdvSIMD
+operations, modeled POSIX/IOKit calls, and the five hottest repeated writer
+kernels:
 
 - the 652-operation general writer;
 - the 453-operation tail writer;
@@ -334,23 +335,26 @@ scalar register, condition flag, and all 236 dynamic memory pages. The complete
 Go path then reproduces both native 224-byte sources exactly. It runs in well
 under one second after the private model has been loaded.
 
-This build intentionally has no embedded account model and is not yet part of
-the normal user workflow. It consumes a mode-`0600` private account-entry model
-plus the captured executable, SINF/SUPF files, SIDB, and IOMACAddress. No
-private model or account material is embedded or committed. The remaining
-non-Go boundary is constructing that account-entry model from the original
-capture bundle; the parser/file bootstrap and source loop after that boundary
-no longer require Python or Unicorn.
+The build embeds a sanitized 436-KiB account-independent model captured before
+the installed SINF and SUPF are opened. Its executable-path page is zero and
+supplied at runtime. Two independent accounts have identical state at this
+boundary apart from that path, and privacy audits find no account-specific
+SINF, SIDB, source, hardware address, or retained path material.
 
-For an already prepared private account-entry model:
+The complete Go path reproduces three Mac controls, including the preserved
+630-byte older-account SIDB. Its 192-byte source matches the native 26A428
+reference without using the iPhone/iOS 16 secret. Python and Unicorn are no
+longer required to construct the account-entry state or `+0x304` source.
+
+Build and run it directly from the captured inputs:
 
 ```sh
 go build -tags fairplayrawsource -o /private/tmp/fairplay-source \
   ./tools/fairplay-recovery
 
 /private/tmp/fairplay-source \
-  --model /private/path/account-entry.model.gz \
-  --raw-source-kernel bootstrap-full \
+  --raw-source-kernel enrollment-full \
+  --raw-source-executable-path /Applications/App.app/App \
   --raw-source-file '/App=/private/path/App-executable' \
   --raw-source-file 'App.sinf=/private/path/App.sinf' \
   --raw-source-file 'App.v5.supf=/private/path/App.v5.supf' \
@@ -361,7 +365,7 @@ go build -tags fairplayrawsource -o /private/tmp/fairplay-source \
   --raw-source-bytes 224
 ```
 
-All private inputs must be owner-only regular files. The IOMACAddress file may
+All private input files must be owner-only regular files. The IOMACAddress file may
 contain six raw bytes or a colon-separated hexadecimal address. A 192-byte
 source is selected with `--raw-source-bytes 192` for the shorter accepted
 layout.

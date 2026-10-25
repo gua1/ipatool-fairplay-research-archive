@@ -569,6 +569,17 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
             ]
         )
         append_writeback(1)
+    elif mnemonic in {"ldrsb", "ldursb"}:
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        output.extend(
+            [
+                f"value{ordinal}, err := s.load({memory_address(disassembler, operands[1])}, 1)",
+                "if err != nil { return err }",
+                write_register(destination, f"signExtendBits(value{ordinal}, 8, {width})"),
+            ]
+        )
+        append_writeback(1)
     elif mnemonic == "ldp":
         first = reg_name(disassembler, operands[0])
         second = reg_name(disassembler, operands[1])
@@ -597,11 +608,11 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
             ]
         )
         append_writeback(2)
-    elif mnemonic in {"str", "stur", "strb", "strh", "sturh"}:
+    elif mnemonic in {"str", "stur", "strb", "sturb", "strh", "sturh"}:
         source = reg_name(disassembler, operands[0])
         size = (
             1
-            if mnemonic == "strb"
+            if mnemonic in {"strb", "sturb"}
             else 2
             if mnemonic in {"strh", "sturh"}
             else 8
@@ -664,6 +675,16 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"-({left} * {right})"))
+    elif mnemonic == "smull":
+        destination = reg_name(disassembler, operands[0])
+        left = operand_expression(disassembler, operands[1], 32)
+        right = operand_expression(disassembler, operands[2], 32)
+        output.append(
+            write_register(
+                destination,
+                f"uint64(int64(int32({left})) * int64(int32({right})))",
+            )
+        )
     elif mnemonic == "mul":
         output.append(binary_expression("*"))
     elif mnemonic == "madd":
@@ -707,6 +728,11 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"unsignedDivide({left}, {right}, {width})"))
+    elif mnemonic == "clz":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        output.append(write_register(destination, f"countLeadingZeros({source}, {width})"))
     elif mnemonic == "ubfx":
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)

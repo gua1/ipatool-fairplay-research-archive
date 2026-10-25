@@ -86,7 +86,7 @@ def branch_lines(disassembler: Cs, instruction) -> list[str] | None:
     if mnemonic in {"braa", "brab", "br"}:
         target = generator.read_register(generator.reg_name(disassembler, operands[0]))
         return [f"pc = {target}", "continue"]
-    if mnemonic in {"blraa", "blr"}:
+    if mnemonic in {"blraa", "blr", "blraaz", "blrabz"}:
         target = generator.read_register(generator.reg_name(disassembler, operands[0]))
         return [f"s.x[30] = {fallthrough:#x}", f"pc = {target}", "continue"]
     if mnemonic in {"ret", "retab"}:

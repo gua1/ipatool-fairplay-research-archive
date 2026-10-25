@@ -44,10 +44,11 @@ var activeRawSourceRuntime *rawSourceRuntime
 
 const rawSourceErrnoAddress = uint64(0x7100FFF00000)
 
-func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, macPath string, stopPC uint64) error {
-	if kernel != "bootstrap-cfg" && kernel != "bootstrap-full" {
-		if len(fileSpecs) != 0 || macPath != "" || stopPC != 0 {
-			return fmt.Errorf("raw source files and MAC are only valid with bootstrap-cfg or bootstrap-full")
+func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, macPath, executablePath string, stopPC uint64) error {
+	runtimeKernel := kernel == "account-cfg" || kernel == "enrollment-full" || kernel == "bootstrap-cfg" || kernel == "bootstrap-full"
+	if !runtimeKernel {
+		if len(fileSpecs) != 0 || macPath != "" || executablePath != "" || stopPC != 0 {
+			return fmt.Errorf("raw source runtime inputs require an account or bootstrap CFG kernel")
 		}
 		activeRawSourceRuntime = nil
 		return nil
@@ -72,6 +73,17 @@ func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, 
 	}
 	if maxStaticAllocation != 0 {
 		runtime.nextAllocation = (maxStaticAllocation + 0x100000) &^ 0xFFFFF
+	}
+	accountKernel := kernel == "account-cfg" || kernel == "enrollment-full"
+	if accountKernel {
+		if executablePath == "" || len(executablePath) >= int(pageSize) {
+			return fmt.Errorf("account-entry parser requires a bounded installed executable path")
+		}
+		if err := value.patch(0x700000200000, append([]byte(executablePath), 0)); err != nil {
+			return err
+		}
+	} else if executablePath != "" {
+		return fmt.Errorf("installed executable path is only valid with an account CFG kernel")
 	}
 	if _, ok := value.pages[rawSourceErrnoAddress]; !ok {
 		value.pages[rawSourceErrnoAddress] = make([]byte, pageSize)
@@ -146,6 +158,7 @@ func (r *rawSourceRuntime) handle(s *state, pc uint64) (uint64, error) {
 	returnAddress := s.x[30]
 	switch pc {
 	case 0xF100000000006000: // free
+	case 0xF1000000000E4000: // chkstk_darwin
 	case 0xF100000000007000: // malloc
 		address, err := r.allocate(s, s.x[0])
 		if err != nil {
@@ -363,6 +376,22 @@ func runRawSource(value *model, kernel string, loop bool, exactIterations int) (
 	worker := newState(value)
 	worker.reset()
 	lastRawSourceState = worker
+	if kernel == "enrollment-full" {
+		if loop || exactIterations != 0 {
+			return "", 0, fmt.Errorf("enrollment-full owns its complete natural loop")
+		}
+		if _, _, err := runRawSourceAccountEntryCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		if _, _, err := runRawSourceBootstrapCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		iterations, err := runRawSourceKernelLoop(worker, "outer")
+		if err != nil {
+			return "", iterations, err
+		}
+		return worker.digest(), iterations, nil
+	}
 	if kernel == "bootstrap-full" {
 		if loop || exactIterations != 0 {
 			return "", 0, fmt.Errorf("bootstrap-full owns its complete natural loop")
@@ -432,6 +461,11 @@ func currentRawSourceReport() (any, error) {
 			dirtyPages[fmt.Sprintf("%#x", address)] = fmt.Sprintf("%x", page)
 		}
 	}
+	accessedPages := make([]string, 0, len(worker.accessed))
+	for address := range worker.accessed {
+		accessedPages = append(accessedPages, fmt.Sprintf("%#x", address))
+	}
+	sort.Strings(accessedPages)
 	return map[string]any{
 		"schema":           "ipatool-fairplay-raw-source-state-v1",
 		"registers":        registers,
@@ -439,6 +473,7 @@ func currentRawSourceReport() (any, error) {
 		"flags":            map[string]bool{"n": worker.n, "z": worker.z, "c": worker.c, "v": worker.v},
 		"page_sha256":      pages,
 		"dirty_page_bytes": dirtyPages,
+		"accessed_pages":   accessedPages,
 		"state_sha256":     worker.digest(),
 	}, nil
 }
@@ -457,6 +492,9 @@ func runRawSourceKernelIteration(worker *state, kernel string) (bool, error) {
 	var exit bool
 	var err error
 	switch kernel {
+	case "account-cfg":
+		_, _, err = runRawSourceAccountEntryCFG(worker, activeRawSourceRuntime, 1_000_000)
+		exit = true
 	case "bootstrap":
 		err = runRawSourceBootstrapKernel(worker, fault{})
 		exit = worker.x[3] != 0x10057AE74

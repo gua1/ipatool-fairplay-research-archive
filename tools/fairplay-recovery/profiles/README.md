@@ -43,6 +43,15 @@ execute the complete generated path with a public deterministic frame/input,
 and local privacy checks find neither retained enrollment frame, source field,
 nor recovered key in the compressed or decompressed artifact.
 
+`macos26a428-account-entry-public.model.gz` is the sanitized pre-license model
+for the complete Go enrollment-source path (SHA-256
+`3f5efce0...8aea9af`). It is captured before the installed SINF and SUPF are
+opened. The executable-path page is all zero and supplied at runtime. The
+retained pages are restricted to the union accessed by two independent
+account controls; private-window audits find no account-specific SINF, SIDB,
+source field, hardware address, or executable path. The same model reproduces
+the preserved older-account 192-byte source without iPhone/iOS 16 material.
+
 The profile is necessary because ordinary offline startup stops at the native
 IOKit boundary before the daemon finishes generating its protected global
 tables. Account-specific state is applied later from the private bundle created
