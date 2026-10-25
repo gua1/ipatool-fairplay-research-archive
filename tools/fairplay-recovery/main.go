@@ -26,10 +26,14 @@ func writePrivateJSON(path string, value any) (returnErr error) {
 		return err
 	}
 	temporaryPath := temporary.Name()
+	published := false
 	defer func() {
 		_ = temporary.Close()
 		if returnErr != nil {
 			_ = os.Remove(temporaryPath)
+			if published {
+				_ = os.Remove(path)
+			}
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
@@ -52,6 +56,7 @@ func writePrivateJSON(path string, value any) (returnErr error) {
 	if err := os.Link(temporaryPath, path); err != nil {
 		return err
 	}
+	published = true
 	if err := os.Chmod(path, 0o600); err != nil {
 		return err
 	}
@@ -64,12 +69,15 @@ func main() {
 	recoveryOutput := flag.String("recover-output", "", "recover the AES model in-process and write private JSON")
 	evaluateInput := flag.String("evaluate-input", "", "private fixed-size evaluator input")
 	evaluateOutput := flag.String("evaluate-output", "", "new private evaluator output")
+	enrollmentFrame := flag.String("enrollment-frame", "", "private 16-byte enrollment frame for SIDB recovery")
 	flag.Parse()
 	var value *model
 	var err error
+	usingEmbeddedModel := false
 	if *modelPath != "" {
 		value, err = loadModel(*modelPath)
 	} else if embedded := embeddedModelBytes(); len(embedded) != 0 {
+		usingEmbeddedModel = true
 		value, err = loadModelBytes(embedded)
 	} else {
 		fmt.Fprintln(os.Stderr, "missing --model")
@@ -78,6 +86,29 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if *enrollmentFrame != "" {
+		address, supported := enrollmentFrameAddress()
+		if !supported {
+			fmt.Fprintln(os.Stderr, "--enrollment-frame is not supported by this evaluator")
+			os.Exit(2)
+		}
+		frame, err := readPrivateInput(*enrollmentFrame)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if len(frame) != 16 {
+			fmt.Fprintln(os.Stderr, "enrollment frame must contain exactly 16 bytes")
+			os.Exit(1)
+		}
+		if err := value.patch(address, frame); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	} else if usingEmbeddedModel && embeddedModelNeedsEnrollmentFrame() {
+		fmt.Fprintln(os.Stderr, "the embedded SIDB model requires --enrollment-frame FILE")
+		os.Exit(2)
 	}
 	server, err := newOracleServer(value, *workers)
 	if err != nil {
@@ -169,10 +200,14 @@ func writePrivateBytes(path string, value []byte) (returnErr error) {
 		return err
 	}
 	temporaryPath := temporary.Name()
+	published := false
 	defer func() {
 		_ = temporary.Close()
 		if returnErr != nil {
 			_ = os.Remove(temporaryPath)
+			if published {
+				_ = os.Remove(path)
+			}
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
@@ -190,6 +225,7 @@ func writePrivateBytes(path string, value []byte) (returnErr error) {
 	if err := os.Link(temporaryPath, path); err != nil {
 		return err
 	}
+	published = true
 	if err := os.Chmod(path, 0o600); err != nil {
 		return err
 	}

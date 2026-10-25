@@ -735,7 +735,16 @@ def write_private_model(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
-    parser.add_argument("--memory-trace", type=Path, required=True)
+    parser.add_argument(
+        "--memory-trace",
+        type=Path,
+        action="append",
+        required=True,
+        help=(
+            "private validation trace used to collect model pages; repeat "
+            "the option to include every validated control-flow variant"
+        ),
+    )
     parser.add_argument("--go-output", type=Path, required=True)
     parser.add_argument("--model-output", type=Path, required=True)
     parser.add_argument("--build-tag")
@@ -758,12 +767,16 @@ def main() -> None:
     fixups, _names = dyld_info_fixups(binary)
     database = RawMachODatabase(binary, fixups=fixups)
 
-    trace = json.loads(args.memory_trace.read_text())
-    if trace.get("binary_sha256") != checkpoint["binary_sha256"]:
+    traces = [json.loads(path.read_text()) for path in args.memory_trace]
+    if any(
+        trace.get("binary_sha256") != checkpoint["binary_sha256"]
+        for trace in traces
+    ):
         raise ValueError("memory trace build mismatch")
     pages = sorted(
         {
             int(event["address"], 16) & ~0xFFF
+            for trace in traces
             for key in ("memory_read_events", "memory_write_events")
             for event in trace[key]
         }
@@ -772,28 +785,29 @@ def main() -> None:
         raise ValueError("memory trace does not include the oracle block")
 
     global MODEL_INITIAL_READ_BYTES
-    written_bytes: set[int] = set()
-    for _ordinal, kind, event in sorted(
-        [
-            (int(event.get("ordinal", index * 2)), "read", event)
-            for index, event in enumerate(trace["memory_read_events"])
-        ]
-        + [
-            (int(event.get("ordinal", index * 2 + 1)), "write", event)
-            for index, event in enumerate(trace["memory_write_events"])
-        ],
-        key=lambda item: item[0],
-    ):
-        address = int(event["address"], 16)
-        size = int(event["size"])
-        if kind == "write":
-            written_bytes.update(range(address, address + size))
-        else:
-            MODEL_INITIAL_READ_BYTES.update(
-                value
-                for value in range(address, address + size)
-                if value not in written_bytes
-            )
+    for trace in traces:
+        written_bytes: set[int] = set()
+        for _ordinal, kind, event in sorted(
+            [
+                (int(event.get("ordinal", index * 2)), "read", event)
+                for index, event in enumerate(trace["memory_read_events"])
+            ]
+            + [
+                (int(event.get("ordinal", index * 2 + 1)), "write", event)
+                for index, event in enumerate(trace["memory_write_events"])
+            ],
+            key=lambda item: item[0],
+        ):
+            address = int(event["address"], 16)
+            size = int(event["size"])
+            if kind == "write":
+                written_bytes.update(range(address, address + size))
+            else:
+                MODEL_INITIAL_READ_BYTES.update(
+                    value
+                    for value in range(address, address + size)
+                    if value not in written_bytes
+                )
 
     global INSTRUCTION_PATH
     if args.instruction_trace is not None:

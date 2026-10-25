@@ -26,7 +26,7 @@ automatic fault-discovery features.
 | --- | --- |
 | `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
-| `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery proven for two independent enrollments; the preceding enrollment-frame producer is still research-only |
+| `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery with an embedded sanitized build model; a private 16-byte enrollment frame is supplied at runtime |
 | `26A428` frame evaluator (`-tags fairplayframe`) | Pure-Go direct evaluator with an embedded sanitized build model; exact across two independent enrollment inputs |
 | `26A428` state-slot evaluator (`-tags fairplaystate`) | Pure-Go 14-slot transform with an embedded sanitized build model; every retained native slot matches across two enrollments |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
@@ -199,13 +199,14 @@ The 26A428 Go profile is validated against 256 random ordinary inputs and 144
 faulted cases before recovery. Its complete in-process recovery takes about
 one second on the 15-core development Mac.
 
-### SIDB bulk-decoder research profile
+### Portable SIDB bulk decoder
 
 The `fairplaysidb` build tag selects a separate 26A428 evaluator for the
 unrolled SIDB block consumer at `0x10008a644..0x100090780`. It contains 5,969
 operations in the one validated path, including its fixed authenticated-branch
-detour. It does not contain an Apple Account's registers, memory, SIDB, MAC
-address, or recovered AES key; those remain in the mode-`0600` private model.
+detour. Its embedded `profiles/macos26a428-sidb-public.model.gz` contains only
+sanitized build state. The enrollment frame is zero in that artifact and must
+be supplied from a mode-`0600` file with `--enrollment-frame`.
 
 The in-process Go recovery was checked against two independent accepted
 enrollments. It reproduced their earlier key hashes exactly in about 2.7 and
@@ -214,11 +215,25 @@ encodings. A sixteen-case causal differential also showed that each byte of
 the preceding enrollment frame has full diffusion into the recovered key,
 while neither external encoding changes.
 
-This profile is not yet the normal `fairplay-enroll recover` path. Constructing
-its private entry model still needs the enrollment-bound frame at selected
-object offset `+0x724`. Until that producer is expressed directly, the public
-capture-to-model command continues to use the checked offline trace. Do not
-ship a recovered SIDB key as a build-global constant.
+The public model includes both validated 26A428 control-flow variants. Replacing
+only its runtime frame reproduces both retained enrollments' exact recovered
+keys. Exact searches for either retained frame, source field, or recovered key
+are negative in both the compressed and decompressed artifact.
+
+```sh
+go build -tags fairplaysidb -o /private/tmp/fairplay-sidb \
+  ./tools/fairplay-recovery
+
+/private/tmp/fairplay-sidb \
+  --enrollment-frame /private/path/enrollment-frame.bin \
+  --recover-output /private/path/recovered-sidb-model.json
+```
+
+Both files are private; the frame is exactly 16 bytes and the output must not
+already exist. Do not ship a recovered SIDB key as a build-global constant.
+This component is not yet the normal `fairplay-enroll recover` path because the
+remaining upstream stage still has to construct the 192/224-byte source field
+at object `+0x304` from captured raw state and hardware identity.
 
 ### Enrollment-frame evaluator
 
@@ -242,10 +257,11 @@ go build -tags fairplayframe -o /private/tmp/fairplay-frame \
   ./tools/fairplay-recovery
 ```
 
-The binary currently exposes the repository's batch oracle protocol. It is a
-portable component for the capture-to-model pipeline, not yet a standalone
-end-user command. The remaining upstream task is deriving its 16-byte input
-directly from the captured SIDB state.
+Use `--evaluate-input` and `--evaluate-output` with mode-`0600` 16-byte files
+to map one transformed candidate to its enrollment frame. It is a portable
+component for the capture-to-model pipeline. The remaining upstream task is
+deriving the state evaluator's 192/224-byte input directly from captured raw
+state and hardware identity.
 
 ### State-slot evaluator
 

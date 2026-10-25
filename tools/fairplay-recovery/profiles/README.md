@@ -35,6 +35,14 @@ the generated evaluator overwrites them; unused checkpoint memory is removed.
 The separate generated 16-byte periodic decoder converts the 192/224-byte
 object source field into that working-buffer representation.
 
+`macos26a428-sidb-public.model.gz` is the sanitized 71-page model for both
+validated paths through the SIDB block consumer (SHA-256
+`cee524a1...adeadba`). Its 16-byte enrollment frame is zero and supplied only
+at runtime. Dynamic pages retain only bytes read before overwrite. Tagged tests
+execute the complete generated path with a public deterministic frame/input,
+and local privacy checks find neither retained enrollment frame, source field,
+nor recovered key in the compressed or decompressed artifact.
+
 The profile is necessary because ordinary offline startup stops at the native
 IOKit boundary before the daemon finishes generating its protected global
 tables. Account-specific state is applied later from the private bundle created

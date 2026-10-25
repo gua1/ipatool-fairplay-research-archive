@@ -358,6 +358,15 @@ DarkPhoenix executable. It still needs a private oracle model generated from a
 matching exact-build checkpoint. That model contains enrollment state and is
 never embedded in ipatool.
 
+The newer 26A428 research components for the state-slot transform, frame
+builder, and SIDB block consumer now use sanitized embedded build models. The
+SIDB component accepts its private 16-byte enrollment frame only at runtime;
+the embedded model contains no retained account frame or recovered key. This
+does not yet make `fairplay-enroll recover` fully Go: constructing the upstream
+192/224-byte source field from raw `SC Info.sidb` and hardware identity still
+uses the checked offline Python/Unicorn continuation. The final
+`fairplay-enrollment.bin` remains private in every workflow.
+
 ### FairPlay enrollment diagnostics
 
 This diagnostic branch can preserve the transaction-bound FairPlay inputs from

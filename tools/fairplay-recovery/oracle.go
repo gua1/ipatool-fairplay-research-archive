@@ -28,6 +28,27 @@ type model struct {
 	domains    map[domainKey][256]uint64
 }
 
+func (m *model) patch(address uint64, value []byte) error {
+	for len(value) != 0 {
+		base := address &^ (pageSize - 1)
+		page := m.pages[base]
+		if page == nil {
+			return fmt.Errorf("oracle patch address %#x is outside the model", address)
+		}
+		// Models loaded from embedded assets are process-global byte slices from
+		// the caller's point of view. Clone every touched page before applying a
+		// private runtime input so the packaged asset remains immutable.
+		page = append([]byte(nil), page...)
+		m.pages[base] = page
+		offset := address & (pageSize - 1)
+		count := min(len(value), int(pageSize-offset))
+		copy(page[offset:offset+uint64(count)], value[:count])
+		address += uint64(count)
+		value = value[count:]
+	}
+	return nil
+}
+
 type domainKey struct {
 	pc       uint64
 	register uint8
