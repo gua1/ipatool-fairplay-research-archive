@@ -28,6 +28,11 @@ model (SHA-256 `b10da4b2...eba849`). It contains fixed build state only. Its
 account input/output and unused object/stack bytes are zero, and tagged tests
 enforce the exact nonzero-byte allowlist before the model can be used.
 
+`macos26a428-state-public.model.gz` is the sanitized model for the repeated
+14-slot evaluator (SHA-256 `d4b05fba...232288`). Its complete 224-byte input
+is zero in the published artifact. Dynamic pages retain only bytes read before
+the generated evaluator overwrites them; unused checkpoint memory is removed.
+
 The profile is necessary because ordinary offline startup stops at the native
 IOKit boundary before the daemon finishes generating its protected global
 tables. Account-specific state is applied later from the private bundle created

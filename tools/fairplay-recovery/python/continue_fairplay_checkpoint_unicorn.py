@@ -732,6 +732,13 @@ def main() -> int:
         help="set one register to an integer value before continuation",
     )
     parser.add_argument(
+        "--register-checkpoint-copy",
+        action="append",
+        default=[],
+        metavar="CHECKPOINT:DEST=SOURCE",
+        help="copy a private register value from another compatible checkpoint",
+    )
+    parser.add_argument(
         "--copy-register",
         action="append",
         default=[],
@@ -1358,6 +1365,34 @@ def main() -> int:
         value = int(value_text, 0) & MASK64
         emulator.reg_write(register_id(name), value)
         register_values.append({"register": name, "value": hex(value)})
+    register_checkpoint_copies: list[dict[str, str]] = []
+    for specification in args.register_checkpoint_copy:
+        source_text, separator, mapping = specification.rpartition(":")
+        if not separator or "=" not in mapping:
+            parser.error(
+                "--register-checkpoint-copy requires CHECKPOINT:DEST=SOURCE"
+            )
+        destination, source = mapping.split("=", 1)
+        source_path = Path(source_text)
+        with gzip.open(source_path, "rb") as stream:
+            source_checkpoint = pickle.load(stream)
+        if source_checkpoint.get("binary_sha256") != actual_binary_sha256:
+            raise ValueError("register-copy checkpoint binary hash mismatch")
+        if source not in source_checkpoint.get("registers", {}):
+            raise ValueError(f"register-copy checkpoint lacks {source}")
+        emulator.reg_write(
+            register_id(destination),
+            int(source_checkpoint["registers"][source]),
+        )
+        register_checkpoint_copies.append(
+            {
+                "checkpoint_sha256": hashlib.sha256(
+                    source_path.read_bytes()
+                ).hexdigest(),
+                "destination": destination,
+                "source": source,
+            }
+        )
     register_copies: list[dict[str, str]] = []
     for specification in args.copy_register:
         destination, source = specification.split("=", 1)
@@ -2716,6 +2751,7 @@ def main() -> int:
         "memory_checkpoint_regions": memory_checkpoint_regions,
         "memory_checkpoint_copies": memory_checkpoint_copies,
         "register_values": register_values,
+        "register_checkpoint_copies": register_checkpoint_copies,
         "register_copies": register_copies,
         "initial_once_token_count": initial_once_token_count,
         "initial_open_file_count": initial_open_file_count,

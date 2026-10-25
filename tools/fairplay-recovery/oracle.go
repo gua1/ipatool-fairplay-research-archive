@@ -167,6 +167,10 @@ func newState(value *model) *state {
 }
 
 func (s *state) begin(block [16]byte) error {
+	return s.beginBytes(block[:])
+}
+
+func (s *state) beginBytes(input []byte) error {
 	for _, address := range s.touched {
 		copy(s.writable[address], s.model.pages[address])
 		delete(s.dirty, address)
@@ -175,7 +179,7 @@ func (s *state) begin(block [16]byte) error {
 	s.x = s.model.registers
 	s.sp = s.model.sp
 	s.n, s.z, s.c, s.v = s.model.n, s.model.z, s.model.c, s.model.v
-	return s.store(s.model.block, block[:])
+	return s.store(s.model.block, input)
 }
 
 func (s *state) page(address uint64, write bool) ([]byte, error) {
@@ -268,6 +272,18 @@ func (s *state) output() ([16]byte, error) {
 		value, err := s.load(s.model.block+uint64(index), 1)
 		if err != nil {
 			return result, err
+		}
+		result[index] = byte(value)
+	}
+	return result, nil
+}
+
+func (s *state) outputBytes(address uint64, size int) ([]byte, error) {
+	result := make([]byte, size)
+	for index := range result {
+		value, err := s.load(address+uint64(index), 1)
+		if err != nil {
+			return nil, err
 		}
 		result[index] = byte(value)
 	}

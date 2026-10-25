@@ -28,6 +28,7 @@ automatic fault-discovery features.
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
 | `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery proven for two independent enrollments; the preceding enrollment-frame producer is still research-only |
 | `26A428` frame evaluator (`-tags fairplayframe`) | Pure-Go direct evaluator with an embedded sanitized build model; exact across two independent enrollment inputs |
+| `26A428` state-slot evaluator (`-tags fairplaystate`) | Pure-Go 14-slot transform with an embedded sanitized build model; every retained native slot matches across two enrollments |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
 Only modern App Store enrollments from newly created Apple Accounts are in
@@ -245,6 +246,34 @@ The binary currently exposes the repository's batch oracle protocol. It is a
 portable component for the capture-to-model pipeline, not yet a standalone
 end-user command. The remaining upstream task is deriving its 16-byte input
 directly from the captured SIDB state.
+
+### State-slot evaluator
+
+The `fairplaystate` tag selects the repeated transform beginning at
+`0x100132ad0`. The same 2,378-instruction path processes fourteen 16-byte
+slots. The generated Go keeps one copy of that path and executes it fourteen
+times; it does not embed a trace interpreter or Apple binary.
+
+Its evaluator input is exactly 224 bytes. Shorter registries are zero-padded
+to fourteen slots by the caller, and only their real candidate slots are
+tested downstream. The transformed slots match every retained native slot for
+both enrollments. Their selected slots differ (1 for the local control, 8 for
+the external control), so portable recovery can try every real slot through
+the frame evaluator and accept only the candidate whose decrypted SINF atom
+tree validates.
+
+```sh
+go build -tags fairplaystate -o /private/tmp/fairplay-state \
+  ./tools/fairplay-recovery
+
+/private/tmp/fairplay-state \
+  --evaluate-input /private/path/state-slots.bin \
+  --evaluate-output /private/path/state-slots.transformed.bin
+```
+
+Both files must be mode `0600`; the output must not already exist. Only hashes
+are printed. The embedded model zeros the complete 224-byte input and retains
+only memory bytes read before the evaluator overwrites them.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

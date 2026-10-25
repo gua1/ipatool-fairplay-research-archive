@@ -52,7 +52,10 @@ BLOCK = 0x710000014EE0
 RESULT_BLOCK = BLOCK
 COPY_RESULT_TO_BLOCK = False
 INSTRUCTION_PATH: tuple[int, ...] | None = None
+INSTRUCTION_PATH_FIRST_REPEAT = False
+REPEAT_COUNT = 1
 MODEL_PAGE_SANITIZER = None
+MODEL_INITIAL_READ_BYTES: set[int] = set()
 MAGIC = b"FPGOOR1\x00"
 VERSION = 2
 
@@ -613,10 +616,15 @@ def generate_go(
             helper_source(),
             "func runGenerated(s *state, selected fault) error {",
         ])
+    if REPEAT_COUNT != 1:
+        lines.append(f"\tfor repeat := 0; repeat < {REPEAT_COUNT}; repeat++ {{")
+    instruction_indent = "\t\t" if REPEAT_COUNT != 1 else "\t"
     for ordinal, instruction in enumerate(instructions):
-        lines.append(f"\t// {instruction.address:#x}: {instruction.mnemonic} {instruction.op_str}")
+        lines.append(f"{instruction_indent}// {instruction.address:#x}: {instruction.mnemonic} {instruction.op_str}")
         for statement in emit_instruction(disassembler, instruction, ordinal):
-            lines.append("\t" + statement)
+            lines.append(instruction_indent + statement)
+    if REPEAT_COUNT != 1:
+        lines.append("\t}")
     if COPY_RESULT_TO_BLOCK and RESULT_BLOCK != BLOCK:
         for offset in range(16):
             lines.extend(
@@ -731,6 +739,11 @@ def main() -> None:
     parser.add_argument("--go-output", type=Path, required=True)
     parser.add_argument("--model-output", type=Path, required=True)
     parser.add_argument("--build-tag")
+    parser.add_argument(
+        "--instruction-trace",
+        type=Path,
+        help="private validation trace whose recent_pcs define a non-linear path",
+    )
     args = parser.parse_args()
 
     with gzip.open(args.checkpoint, "rb") as stream:
@@ -757,6 +770,47 @@ def main() -> None:
     )
     if BLOCK & ~0xFFF not in pages:
         raise ValueError("memory trace does not include the oracle block")
+
+    global MODEL_INITIAL_READ_BYTES
+    written_bytes: set[int] = set()
+    for _ordinal, kind, event in sorted(
+        [
+            (int(event.get("ordinal", index * 2)), "read", event)
+            for index, event in enumerate(trace["memory_read_events"])
+        ]
+        + [
+            (int(event.get("ordinal", index * 2 + 1)), "write", event)
+            for index, event in enumerate(trace["memory_write_events"])
+        ],
+        key=lambda item: item[0],
+    ):
+        address = int(event["address"], 16)
+        size = int(event["size"])
+        if kind == "write":
+            written_bytes.update(range(address, address + size))
+        else:
+            MODEL_INITIAL_READ_BYTES.update(
+                value
+                for value in range(address, address + size)
+                if value not in written_bytes
+            )
+
+    global INSTRUCTION_PATH
+    if args.instruction_trace is not None:
+        instruction_trace = json.loads(args.instruction_trace.read_text())
+        if instruction_trace.get("binary_sha256") != checkpoint["binary_sha256"]:
+            raise ValueError("instruction trace build mismatch")
+        path = [int(value, 16) for value in instruction_trace.get("recent_pcs", [])]
+        if path and path[-1] == STOP:
+            path.pop()
+        if not path or path[0] != START:
+            raise ValueError("instruction trace does not begin at the oracle entry")
+        if INSTRUCTION_PATH_FIRST_REPEAT:
+            try:
+                path = path[: path[1:].index(START) + 1]
+            except ValueError as error:
+                raise ValueError("instruction trace has no repeated oracle entry") from error
+        INSTRUCTION_PATH = tuple(path)
 
     domains = recover_index_domains(args.checkpoint, database)
 

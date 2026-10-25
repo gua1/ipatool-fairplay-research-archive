@@ -1,4 +1,4 @@
-//go:build fairplay26a428 && !fairplaysidb && !fairplayframe
+//go:build fairplay26a428 && !fairplaysidb && !fairplayframe && !fairplaystate
 
 // Code generated from the validated macOS 26A428 oracle trace; DO NOT EDIT.
 package main
