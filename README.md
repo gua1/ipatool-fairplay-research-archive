@@ -361,11 +361,16 @@ never embedded in ipatool.
 The newer 26A428 research components for the state-slot transform, frame
 builder, and SIDB block consumer now use sanitized embedded build models. The
 SIDB component accepts its private 16-byte enrollment frame only at runtime;
-the embedded model contains no retained account frame or recovered key. This
-does not yet make `fairplay-enroll recover` fully Go: constructing the upstream
-192/224-byte source field from raw `SC Info.sidb` and hardware identity still
-uses the checked offline Python/Unicorn continuation. The final
-`fairplay-enrollment.bin` remains private in every workflow.
+the embedded model contains no retained account frame or recovered key. The
+parser/file bootstrap and complete source loop are now pure Go too: given a
+private account-entry model and the captured executable, SINF/SUPFs, SIDB, and
+hardware address, they reproduce the native 192/224-byte source exactly.
+
+`fairplay-enroll recover` is not fully Go yet. Its remaining Python/Unicorn
+boundary is the earlier offline construction of that private account-entry
+model from the capture bundle, plus the legacy checkpoint-based packaging and
+differential checks. The final `fairplay-enrollment.bin` remains private in
+every workflow.
 
 ### FairPlay enrollment diagnostics
 

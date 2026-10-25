@@ -292,10 +292,12 @@ Both files must be mode `0600`; the output must not already exist. Only hashes
 are printed. The embedded model zeros the complete 224-byte working buffer and
 retains only memory bytes read before the evaluator overwrites them.
 
-### Raw source-kernel port
+### Raw enrollment-source port
 
-The research-only `fairplayrawsource` build contains generated Go for the five
-hottest repeated kernels between raw SIDB loading and object `+0x304`:
+The research-only `fairplayrawsource` build now contains the complete checked
+26A428 path from the private account-entry snapshot to object `+0x304`. It
+includes the parser and file bootstrap, its scalar and SIMD operations, modeled
+POSIX/IOKit calls, and the five hottest repeated writer kernels:
 
 - the 652-operation general writer;
 - the 453-operation tail writer;
@@ -319,20 +321,50 @@ and SIDB evaluators reproduces both retained enrollment frames and decoder-key
 hashes end to end.
 
 The same outer code also passes the normal `fairplay-enroll recover` A
-checkpoint, whose control path has 427 iterations. It finishes in about 0.32
-seconds and emits the exact native 224-byte source. The immediately upstream
-32-operation bootstrap kernel is also generated Go and matches A/B after its
-63-iteration natural invocation. That kernel accounts for about 5.3 million
-of the remaining 7.8 million bootstrap instructions.
+checkpoint, whose control path has 427 iterations. The immediately upstream
+32-operation bootstrap kernel matches A/B after its 63-iteration natural
+invocation.
 
-This build intentionally has no embedded account model and is not part of the
-normal user workflow. It consumes a mode-`0600` private outer-entry model and
-can write the exact `+0x304` source with `--raw-source-output` and
-`--raw-source-bytes`. The remaining work is upstream: construct that outer-entry
-model directly from the captured raw SIDB and hardware identity. No private
-outer model is embedded or committed. The remaining bootstrap orchestrator has
-multiple parser/file-state variants, so it is not yet presented as a complete
-Go path.
+The final parser/file CFG adds 953 verified basic blocks. Its functions are
+split per block so Go compilation stays bounded; authenticated branches remain
+explicit CFG edges, not a generic ARM interpreter. The implementation also
+models the small AdvSIMD subset used by the natural path. At the outer-loop
+handoff, both independent account controls match the native reference in every
+scalar register, condition flag, and all 236 dynamic memory pages. The complete
+Go path then reproduces both native 224-byte sources exactly. It runs in well
+under one second after the private model has been loaded.
+
+This build intentionally has no embedded account model and is not yet part of
+the normal user workflow. It consumes a mode-`0600` private account-entry model
+plus the captured executable, SINF/SUPF files, SIDB, and IOMACAddress. No
+private model or account material is embedded or committed. The remaining
+non-Go boundary is constructing that account-entry model from the original
+capture bundle; the parser/file bootstrap and source loop after that boundary
+no longer require Python or Unicorn.
+
+For an already prepared private account-entry model:
+
+```sh
+go build -tags fairplayrawsource -o /private/tmp/fairplay-source \
+  ./tools/fairplay-recovery
+
+/private/tmp/fairplay-source \
+  --model /private/path/account-entry.model.gz \
+  --raw-source-kernel bootstrap-full \
+  --raw-source-file '/App=/private/path/App-executable' \
+  --raw-source-file 'App.sinf=/private/path/App.sinf' \
+  --raw-source-file 'App.v5.supf=/private/path/App.v5.supf' \
+  --raw-source-file 'App.supf=/private/path/App.supf' \
+  --raw-source-file '/var/db/fpsd/SC Info/SC Info.sidb=/private/path/SC Info.sidb' \
+  --raw-source-mac /private/path/iomac.bin \
+  --raw-source-output /private/path/source-224.bin \
+  --raw-source-bytes 224
+```
+
+All private inputs must be owner-only regular files. The IOMACAddress file may
+contain six raw bytes or a colon-separated hexadecimal address. A 192-byte
+source is selected with `--raw-source-bytes 192` for the shorter accepted
+layout.
 
 Use an already recovered external model without placing it in the ipatool
 repository:
