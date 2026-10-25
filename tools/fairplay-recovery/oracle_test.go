@@ -37,6 +37,32 @@ func TestBitHelpers(t *testing.T) {
 	}
 }
 
+func TestARM64ArithmeticHelpers(t *testing.T) {
+	worker := newState(&model{})
+	if got := worker.addWithCarry(0xffffffff, 0, true, 32); got != 0 || !worker.z || !worker.c || worker.n || worker.v {
+		t.Fatalf("32-bit add-with-carry result=%#x flags=%t/%t/%t/%t", got, worker.n, worker.z, worker.c, worker.v)
+	}
+	if got := worker.addWithCarry(0x7fffffff, 1, false, 32); got != 0x80000000 || !worker.n || worker.z || worker.c || !worker.v {
+		t.Fatalf("32-bit signed overflow result=%#x flags=%t/%t/%t/%t", got, worker.n, worker.z, worker.c, worker.v)
+	}
+	if got := worker.addWithCarry(^uint64(0), 0, true, 64); got != 0 || !worker.z || !worker.c || worker.n || worker.v {
+		t.Fatalf("64-bit add-with-carry result=%#x flags=%t/%t/%t/%t", got, worker.n, worker.z, worker.c, worker.v)
+	}
+	worker.compare64(0, 1)
+	if !worker.n || worker.z || worker.c || worker.v {
+		t.Fatalf("64-bit compare flags=%t/%t/%t/%t", worker.n, worker.z, worker.c, worker.v)
+	}
+	if got := unsignedDivide(17, 5, 32); got != 3 {
+		t.Fatalf("32-bit unsigned divide = %d", got)
+	}
+	if got := unsignedDivide(17, 0, 64); got != 0 {
+		t.Fatalf("zero-divisor ARM result = %d", got)
+	}
+	if got := multiplyHigh64(0xffffffffffffffff, 2); got != 1 {
+		t.Fatalf("unsigned multiply-high = %#x", got)
+	}
+}
+
 func TestPrivateOracleFixture(t *testing.T) {
 	path := os.Getenv("FAIRPLAY_GO_ORACLE_MODEL")
 	expected := os.Getenv("FAIRPLAY_GO_ORACLE_BASELINE_SHA256")

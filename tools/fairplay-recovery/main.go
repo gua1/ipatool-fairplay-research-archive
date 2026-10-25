@@ -70,6 +70,8 @@ func main() {
 	evaluateInput := flag.String("evaluate-input", "", "private fixed-size evaluator input")
 	evaluateOutput := flag.String("evaluate-output", "", "new private evaluator output")
 	enrollmentFrame := flag.String("enrollment-frame", "", "private 16-byte enrollment frame for SIDB recovery")
+	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: writer, tail, even, odd, or digest")
+	rawSourceLoop := flag.Bool("raw-source-loop", false, "run one private 26A428 source-writer loop to its natural exit")
 	flag.Parse()
 	var value *model
 	var err error
@@ -108,6 +110,23 @@ func main() {
 		}
 	} else if usingEmbeddedModel && embeddedModelNeedsEnrollmentFrame() {
 		fmt.Fprintln(os.Stderr, "the embedded SIDB model requires --enrollment-frame FILE")
+		os.Exit(2)
+	}
+	if *rawSourceKernel != "" {
+		if *recoveryOutput != "" || *evaluateInput != "" || *evaluateOutput != "" || *enrollmentFrame != "" {
+			fmt.Fprintln(os.Stderr, "raw source execution cannot be combined with recovery, evaluation, or frame inputs")
+			os.Exit(2)
+		}
+		digest, iterations, err := runRawSource(value, *rawSourceKernel, *rawSourceLoop)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("fairplay_raw_source=1 kernel=%s loop=%t iterations=%d state_sha256=%s\n", *rawSourceKernel, *rawSourceLoop, iterations, digest)
+		return
+	}
+	if *rawSourceLoop {
+		fmt.Fprintln(os.Stderr, "--raw-source-loop requires --raw-source-kernel")
 		os.Exit(2)
 	}
 	server, err := newOracleServer(value, *workers)

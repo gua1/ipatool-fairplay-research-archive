@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
+	"sort"
 )
 
 const (
@@ -187,11 +189,7 @@ func newState(value *model) *state {
 	return &state{model: value, writable: make(map[uint64][]byte), dirty: make(map[uint64]bool)}
 }
 
-func (s *state) begin(block [16]byte) error {
-	return s.beginBytes(block[:])
-}
-
-func (s *state) beginBytes(input []byte) error {
+func (s *state) reset() {
 	for _, address := range s.touched {
 		copy(s.writable[address], s.model.pages[address])
 		delete(s.dirty, address)
@@ -200,7 +198,49 @@ func (s *state) beginBytes(input []byte) error {
 	s.x = s.model.registers
 	s.sp = s.model.sp
 	s.n, s.z, s.c, s.v = s.model.n, s.model.z, s.model.c, s.model.v
+
+}
+
+func (s *state) begin(block [16]byte) error {
+	return s.beginBytes(block[:])
+}
+
+func (s *state) beginBytes(input []byte) error {
+	s.reset()
 	return s.store(s.model.block, input)
+}
+
+func (s *state) digest() string {
+	hash := sha256.New()
+	var word [8]byte
+	for _, value := range s.x {
+		binary.LittleEndian.PutUint64(word[:], value)
+		_, _ = hash.Write(word[:])
+	}
+	binary.LittleEndian.PutUint64(word[:], s.sp)
+	_, _ = hash.Write(word[:])
+	flags := []byte{0, 0, 0, 0}
+	for index, value := range []bool{s.n, s.z, s.c, s.v} {
+		if value {
+			flags[index] = 1
+		}
+	}
+	_, _ = hash.Write(flags)
+	addresses := make([]uint64, 0, len(s.model.pages))
+	for address := range s.model.pages {
+		addresses = append(addresses, address)
+	}
+	sort.Slice(addresses, func(left, right int) bool { return addresses[left] < addresses[right] })
+	for _, address := range addresses {
+		binary.LittleEndian.PutUint64(word[:], address)
+		_, _ = hash.Write(word[:])
+		page := s.model.pages[address]
+		if writable := s.writable[address]; writable != nil {
+			page = writable
+		}
+		_, _ = hash.Write(page)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func (s *state) page(address uint64, write bool) ([]byte, error) {
@@ -388,6 +428,55 @@ func (s *state) compare32(left, right uint32) {
 	s.z = result == 0
 	s.c = left >= right
 	s.v = ((left ^ right) & (left ^ result) & 0x80000000) != 0
+}
+
+func (s *state) compare64(left, right uint64) {
+	result := left - right
+	s.n = result&0x8000000000000000 != 0
+	s.z = result == 0
+	s.c = left >= right
+	s.v = ((left ^ right) & (left ^ result) & 0x8000000000000000) != 0
+}
+
+func (s *state) addWithCarry(left, right uint64, carry bool, width int) uint64 {
+	carryValue := uint64(0)
+	if carry {
+		carryValue = 1
+	}
+	if width == 32 {
+		result64 := uint64(uint32(left)) + uint64(uint32(right)) + carryValue
+		result := uint32(result64)
+		s.n = result&0x80000000 != 0
+		s.z = result == 0
+		s.c = result64>>32 != 0
+		s.v = (^(uint32(left) ^ uint32(right)) & (uint32(left) ^ result) & 0x80000000) != 0
+		return uint64(result)
+	}
+	result, carryOut := bits.Add64(left, right, carryValue)
+	s.n = result&0x8000000000000000 != 0
+	s.z = result == 0
+	s.c = carryOut != 0
+	s.v = (^(left ^ right) & (left ^ result) & 0x8000000000000000) != 0
+	return result
+}
+
+func multiplyHigh64(left, right uint64) uint64 {
+	high, _ := bits.Mul64(left, right)
+	return high
+}
+
+func unsignedDivide(left, right uint64, width int) uint64 {
+	if width == 32 {
+		divisor := uint32(right)
+		if divisor == 0 {
+			return 0
+		}
+		return uint64(uint32(left) / divisor)
+	}
+	if right == 0 {
+		return 0
+	}
+	return left / right
 }
 
 func (s *state) test32(value uint32) {

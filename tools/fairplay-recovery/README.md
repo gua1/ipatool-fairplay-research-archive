@@ -292,6 +292,30 @@ Both files must be mode `0600`; the output must not already exist. Only hashes
 are printed. The embedded model zeros the complete 224-byte working buffer and
 retains only memory bytes read before the evaluator overwrites them.
 
+### Raw source-kernel port
+
+The research-only `fairplayrawsource` build contains generated Go for the five
+hottest repeated kernels between raw SIDB loading and object `+0x304`:
+
+- the 652-operation general writer;
+- the 453-operation tail writer;
+- the 221-operation even-byte writer;
+- the 312-operation odd-byte writer;
+- the 1,719-operation digest core plus its 13-operation loop prologue.
+
+Each function was generated independently from both retained enrollments; the
+Go source is byte-identical. One-step and natural-loop state digests match the
+native checkpoints exactly for both controls. The checked loop counts are
+61/55, 140/140, 50/50, 50/50, and 11/11 respectively. Together these kernels
+cover about 82% and 81% of the dynamic instructions represented by the top-250
+block profiles.
+
+This build intentionally has no embedded account model and is not part of the
+normal user workflow. It consumes a mode-`0600` private checkpoint model for
+differential validation. The remaining work is to compose the kernels with
+the lower-frequency dispatcher/orchestration blocks and inject raw SIDB/MAC
+inputs, not to reverse the already-ported kernel bodies again.
+
 Use an already recovered external model without placing it in the ipatool
 repository:
 
