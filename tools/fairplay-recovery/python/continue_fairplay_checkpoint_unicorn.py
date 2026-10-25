@@ -459,6 +459,16 @@ def main() -> int:
     parser.add_argument("--iokit15-output", type=Path)
     parser.add_argument("--trace-instructions", action="store_true")
     parser.add_argument(
+        "--trace-block-counts",
+        type=int,
+        default=0,
+        metavar="LIMIT",
+        help=(
+            "report the LIMIT most frequently executed basic-block starts; "
+            "zero disables block profiling"
+        ),
+    )
+    parser.add_argument(
         "--trace-memory-reads",
         action="store_true",
         help="record read PC/address/size tuples without retaining values",
@@ -1117,6 +1127,7 @@ def main() -> int:
     watched_register_events: list[dict[str, object]] = []
     traced_code_events: list[dict[str, object]] = []
     traced_code_hit_counts: dict[int, int] = {}
+    block_counts: dict[int, list[int]] = {}
     previous_pc: int | None = None
     lazy_zero_pages: set[int] = set()
     arbitrary_zero_pages: set[int] = set()
@@ -2047,6 +2058,15 @@ def main() -> int:
         if recent_pcs is not None:
             recent_pcs.append(address)
 
+    def on_profiled_block(
+        _uc: Uc, address: int, size: int, _user: object
+    ) -> None:
+        row = block_counts.get(address)
+        if row is None:
+            block_counts[address] = [1, size]
+        else:
+            row[0] += 1
+
     def on_traced_code(
         _uc: Uc, address: int, _size: int, _user: object
     ) -> None:
@@ -2534,6 +2554,8 @@ def main() -> int:
                 begin=address,
                 end=address,
             )
+    if args.trace_block_counts > 0:
+        emulator.hook_add(UC_HOOK_BLOCK, on_profiled_block)
     for address in traced_code_addresses:
         emulator.hook_add(
             UC_HOOK_CODE,
@@ -2747,6 +2769,17 @@ def main() -> int:
             [hex(address) for address in recent_pcs]
             if recent_pcs is not None
             else []
+        ),
+        "block_counts": [
+            {"pc": hex(address), "count": count, "size": size}
+            for address, (count, size) in sorted(
+                block_counts.items(),
+                key=lambda item: (-item[1][0], item[0]),
+            )[: args.trace_block_counts]
+        ],
+        "profiled_block_count": len(block_counts),
+        "profiled_instruction_count": sum(
+            count * (size // 4) for count, size in block_counts.values()
         ),
         "pointer_auth_patches": patch_counts,
         "mapped_checkpoint_pages": mapped_pages,

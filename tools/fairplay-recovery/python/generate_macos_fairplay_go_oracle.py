@@ -20,8 +20,12 @@ import struct
 from capstone import CS_ARCH_ARM64, CS_MODE_ARM, Cs
 from capstone.arm64 import (
     ARM64_CC_EQ,
+    ARM64_CC_GT,
+    ARM64_CC_GE,
     ARM64_CC_HI,
+    ARM64_CC_LE,
     ARM64_CC_LO,
+    ARM64_CC_LT,
     ARM64_CC_NE,
     ARM64_EXT_SXTB,
     ARM64_EXT_SXTH,
@@ -55,6 +59,7 @@ INSTRUCTION_PATH: tuple[int | str, ...] | None = None
 INSTRUCTION_PATH_FIRST_REPEAT = False
 INSTRUCTION_PATH_END_BEFORE = None
 BLOCK_PATH_MACROS: dict[int, tuple[int, str]] = {}
+BLOCK_PATH_REPLACEMENTS: dict[int, str] = {}
 REPEAT_COUNT = 1
 MODEL_PAGE_SANITIZER = None
 MODEL_INITIAL_READ_BYTES: set[int] = set()
@@ -242,6 +247,10 @@ def condition_name(code: int) -> str:
         ARM64_CC_NE: "ne",
         ARM64_CC_LO: "lo",
         ARM64_CC_HI: "hi",
+        ARM64_CC_LT: "lt",
+        ARM64_CC_LE: "le",
+        ARM64_CC_GT: "gt",
+        ARM64_CC_GE: "ge",
     }[code]
 
 
@@ -393,6 +402,17 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], 32)
         right = operand_expression(disassembler, operands[2], 32)
         output.append(write_register(destination, f"uint64(uint32({left})) * uint64(uint32({right}))"))
+    elif mnemonic == "umaddl":
+        destination = reg_name(disassembler, operands[0])
+        left = operand_expression(disassembler, operands[1], 32)
+        right = operand_expression(disassembler, operands[2], 32)
+        addend = operand_expression(disassembler, operands[3], 64)
+        output.append(
+            write_register(
+                destination,
+                f"uint64(uint32({left}))*uint64(uint32({right})) + {addend}",
+            )
+        )
     elif mnemonic == "umulh":
         destination = reg_name(disassembler, operands[0])
         left = operand_expression(disassembler, operands[1], 64)
@@ -435,6 +455,21 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         right = operand_expression(disassembler, operands[1], width)
         cast = "uint32" if width == 32 else "uint64"
         output.append(f"s.compare{width}({cast}({left}), {cast}({right}))")
+    elif mnemonic == "ccmp":
+        width = reg_width(reg_name(disassembler, operands[0]))
+        left = operand_expression(disassembler, operands[0], width)
+        right = operand_expression(disassembler, operands[1], width)
+        immediate = int(operands[2].imm) & 0xF
+        cast = "uint32" if width == 32 else "uint64"
+        output.extend(
+            [
+                f"if s.condition(\"{condition_name(instruction.cc)}\") {{",
+                f"\ts.compare{width}({cast}({left}), {cast}({right}))",
+                "} else {",
+                f"\ts.setNZCV({immediate:#x})",
+                "}",
+            ]
+        )
     elif mnemonic == "cmn":
         width = reg_width(reg_name(disassembler, operands[0]))
         left = operand_expression(disassembler, operands[0], width)
@@ -781,6 +816,15 @@ def write_private_model(
                 data = checkpoint_pages.get(address)
                 if data is None:
                     data = page_from_image(database, address)
+                elif isinstance(data, dict):
+                    data_page = (
+                        bytearray(page_from_image(database, address))
+                        if address < 0x700000000000
+                        else bytearray(0x1000)
+                    )
+                    for offset, value in data.items():
+                        data_page[offset] = value & 0xFF
+                    data = bytes(data_page)
                 if not isinstance(data, bytes) or len(data) != 0x1000:
                     raise ValueError(f"invalid model page {address:#x}")
                 if MODEL_PAGE_SANITIZER is not None:
@@ -932,6 +976,11 @@ def main() -> None:
         index = 0
         while index < len(blocks):
             address = blocks[index]
+            replacement = BLOCK_PATH_REPLACEMENTS.get(address)
+            if replacement is not None:
+                path.append(replacement)
+                index += 1
+                continue
             macro = BLOCK_PATH_MACROS.get(address)
             if macro is not None:
                 exit_address, statement = macro
@@ -940,9 +989,12 @@ def main() -> None:
                 while index < len(blocks) and blocks[index] != exit_address:
                     index += 1
                 if index == len(blocks):
-                    raise ValueError(
-                        f"block macro at {address:#x} never reaches {exit_address:#x}"
-                    )
+                    if not (
+                        INSTRUCTION_PATH_FIRST_REPEAT and exit_address == START
+                    ):
+                        raise ValueError(
+                            f"block macro at {address:#x} never reaches {exit_address:#x}"
+                        )
                 continue
             size = sizes.get(address)
             if size is None or size <= 0 or size % 4 != 0:

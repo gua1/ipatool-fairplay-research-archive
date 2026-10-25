@@ -318,12 +318,21 @@ boundary, and matches the complete native state after 226 iterations for A and
 and SIDB evaluators reproduces both retained enrollment frames and decoder-key
 hashes end to end.
 
+The same outer code also passes the normal `fairplay-enroll recover` A
+checkpoint, whose control path has 427 iterations. It finishes in about 0.32
+seconds and emits the exact native 224-byte source. The immediately upstream
+32-operation bootstrap kernel is also generated Go and matches A/B after its
+63-iteration natural invocation. That kernel accounts for about 5.3 million
+of the remaining 7.8 million bootstrap instructions.
+
 This build intentionally has no embedded account model and is not part of the
 normal user workflow. It consumes a mode-`0600` private outer-entry model and
 can write the exact `+0x304` source with `--raw-source-output` and
 `--raw-source-bytes`. The remaining work is upstream: construct that outer-entry
 model directly from the captured raw SIDB and hardware identity. No private
-outer model is embedded or committed.
+outer model is embedded or committed. The remaining bootstrap orchestrator has
+multiple parser/file-state variants, so it is not yet presented as a complete
+Go path.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

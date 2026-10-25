@@ -17,6 +17,11 @@ generator.DEFAULT_BUILD_TAG = (
     "fairplayrawsource && !fairplaysidb && !fairplayframe && "
     "!fairplaystate && !fairplay26a428"
 )
+generator.BLOCK_PATH_REPLACEMENTS = {
+    0x10046119C: (
+        "if s.x[9] == 0x10046119C { if err := runRawSourceCycleFinal(s, fault{}); err != nil { return err } }"
+    ),
+}
 
 
 if __name__ == "__main__":

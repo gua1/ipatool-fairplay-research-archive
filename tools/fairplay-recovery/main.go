@@ -70,7 +70,7 @@ func main() {
 	evaluateInput := flag.String("evaluate-input", "", "private fixed-size evaluator input")
 	evaluateOutput := flag.String("evaluate-output", "", "new private evaluator output")
 	enrollmentFrame := flag.String("enrollment-frame", "", "private 16-byte enrollment frame for SIDB recovery")
-	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: writer, tail, even, odd, digest, cycle, outer-primary, or outer")
+	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: bootstrap, writer, tail, even, odd, digest, cycle, outer-primary, or outer")
 	rawSourceLoop := flag.Bool("raw-source-loop", false, "run one private 26A428 source-writer loop to its natural exit")
 	rawSourceIterations := flag.Int("raw-source-iterations", 0, "run exactly this many raw-source kernel iterations")
 	rawSourceReport := flag.String("raw-source-report", "", "new private JSON report for raw-source register/page state")

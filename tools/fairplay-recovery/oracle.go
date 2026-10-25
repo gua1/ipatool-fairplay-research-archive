@@ -483,6 +483,13 @@ func (s *state) test32(value uint32) {
 	s.n, s.z, s.c, s.v = value&0x80000000 != 0, value == 0, false, false
 }
 
+func (s *state) setNZCV(value int) {
+	s.n = value&8 != 0
+	s.z = value&4 != 0
+	s.c = value&2 != 0
+	s.v = value&1 != 0
+}
+
 func (s *state) condition(name string) bool {
 	switch name {
 	case "eq":
@@ -493,6 +500,14 @@ func (s *state) condition(name string) bool {
 		return !s.c
 	case "hi":
 		return s.c && !s.z
+	case "lt":
+		return s.n != s.v
+	case "le":
+		return s.z || s.n != s.v
+	case "gt":
+		return !s.z && s.n == s.v
+	case "ge":
+		return s.n == s.v
 	default:
 		panic("unsupported generated condition: " + name)
 	}

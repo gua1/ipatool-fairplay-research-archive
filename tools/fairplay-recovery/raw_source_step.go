@@ -95,6 +95,9 @@ func runRawSourceKernelIteration(worker *state, kernel string) (bool, error) {
 	var exit bool
 	var err error
 	switch kernel {
+	case "bootstrap":
+		err = runRawSourceBootstrapKernel(worker, fault{})
+		exit = worker.x[3] != 0x10057AE74
 	case "writer":
 		exit = uint32(worker.x[1])+0x9FCE627E > 0xC7
 		err = runRawSourceWriterKernel(worker, fault{})
@@ -113,13 +116,13 @@ func runRawSourceKernelIteration(worker *state, kernel string) (bool, error) {
 		err = runRawSourceOuterIteration(worker, fault{})
 		if err == nil && worker.x[12] == 0x1007822CC {
 			err = runRawSourceCycleBoundary(worker, fault{})
-			exit = worker.x[8] != 0x1005B7438
+			exit = rawSourceCycleExited(worker)
 		} else {
 			exit = worker.x[12] != 0x1005B7438
 		}
 	case "cycle":
 		err = runRawSourceCycleBoundary(worker, fault{})
-		exit = worker.x[8] != 0x1005B7438
+		exit = rawSourceCycleExited(worker)
 	case "outer-primary":
 		err = runRawSourceOuterIteration(worker, fault{})
 		exit = worker.x[12] != 0x1005B7438
@@ -138,6 +141,13 @@ func runRawSourceKernelIteration(worker *state, kernel string) (bool, error) {
 	return exit, err
 }
 
+func rawSourceCycleExited(worker *state) bool {
+	if worker.x[9] == 0x1005B7438 {
+		return false
+	}
+	return worker.x[8] != 0x1005B7438
+}
+
 func runRawSourceKernelLoop(worker *state, kernel string) (int, error) {
 	if kernel == "digest-natural" {
 		if err := runRawSourceDigestPrologue(worker, fault{}); err != nil {
@@ -145,7 +155,11 @@ func runRawSourceKernelLoop(worker *state, kernel string) (int, error) {
 		}
 		kernel = "digest"
 	}
-	for iterations := 1; iterations <= 256; iterations++ {
+	limit := 1024
+	if kernel == "bootstrap" {
+		limit = 200000
+	}
+	for iterations := 1; iterations <= limit; iterations++ {
 		exit, err := runRawSourceKernelIteration(worker, kernel)
 		if err != nil {
 			return iterations - 1, err
@@ -154,5 +168,5 @@ func runRawSourceKernelLoop(worker *state, kernel string) (int, error) {
 			return iterations, nil
 		}
 	}
-	return 256, fmt.Errorf("raw source writer loop did not reach its bounded exit")
+	return limit, fmt.Errorf("raw source writer loop did not reach its bounded exit")
 }
