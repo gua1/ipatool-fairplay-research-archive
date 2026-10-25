@@ -49,6 +49,7 @@ from raw_macho_db import RawMachODatabase, dyld_info_fixups
 START = 0x100221894
 STOP = 0x100223A30
 BLOCK = 0x710000014EE0
+INSTRUCTION_PATH: tuple[int, ...] | None = None
 MAGIC = b"FPGOOR1\x00"
 VERSION = 2
 
@@ -272,9 +273,9 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         shift = operands[1].shift.value
         value = int(operands[1].imm) & 0xFFFF
         output.append(write_register(destination, f"insertBits({read_register(destination)}, {value:#x}, {shift}, 16, {width})"))
-    elif mnemonic in {"ldr", "ldur", "ldrb"}:
+    elif mnemonic in {"ldr", "ldur", "ldrb", "ldurb"}:
         destination = reg_name(disassembler, operands[0])
-        size = 1 if mnemonic == "ldrb" else 8 if reg_width(destination) == 64 else 4
+        size = 1 if mnemonic in {"ldrb", "ldurb"} else 8 if reg_width(destination) == 64 else 4
         output.extend(
             [
                 f"value{ordinal}, err := s.load({memory_address(disassembler, operands[1])}, {size})",
@@ -285,15 +286,27 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
     elif mnemonic == "ldp":
         first = reg_name(disassembler, operands[0])
         second = reg_name(disassembler, operands[1])
+        size = 8 if reg_width(first) == 64 else 4
         address = memory_address(disassembler, operands[2])
         output.extend(
             [
-                f"value{ordinal}a, err := s.load({address}, 8)",
+                f"value{ordinal}a, err := s.load({address}, {size})",
                 "if err != nil { return err }",
-                f"value{ordinal}b, err := s.load(({address}) + 8, 8)",
+                f"value{ordinal}b, err := s.load(({address}) + {size}, {size})",
                 "if err != nil { return err }",
                 write_register(first, f"value{ordinal}a"),
                 write_register(second, f"value{ordinal}b"),
+            ]
+        )
+    elif mnemonic == "stp":
+        first = reg_name(disassembler, operands[0])
+        second = reg_name(disassembler, operands[1])
+        size = 8 if reg_width(first) == 64 else 4
+        address = memory_address(disassembler, operands[2])
+        output.extend(
+            [
+                f"if err := s.storeValue({address}, {read_register(first)}, {size}); err != nil {{ return err }}",
+                f"if err := s.storeValue(({address}) + {size}, {read_register(second)}, {size}); err != nil {{ return err }}",
             ]
         )
     elif mnemonic in {"str", "stur", "strb"}:
@@ -380,12 +393,31 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), {left}, {right})"))
+    elif mnemonic == "cneg":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        output.append(write_register(destination, f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), -({source}), {source})"))
     elif mnemonic == "csneg":
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), {left}, -({right}))"))
+    elif mnemonic == "bics":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        output.append(f"result{ordinal} := uint32({left} &^ {right})")
+        output.append(write_register(destination, f"result{ordinal}"))
+        output.append(f"s.test32(result{ordinal})")
+    elif mnemonic == "ubfiz":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        lsb, bits = int(operands[2].imm), int(operands[3].imm)
+        output.append(write_register(destination, f"(({source}) & bitMask({bits}, {width})) << {lsb}"))
     elif mnemonic == "adrp":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"{int(operands[1].imm):#x}"))
@@ -464,27 +496,59 @@ func selectValue(condition bool, left, right uint64) uint64 {
 '''
 
 
-def generate_go(database: RawMachODatabase, binary_hash: bytes) -> str:
+def unpack_fault_site(site: tuple[object, ...]) -> tuple[int, str, str, int]:
+    if len(site) == 3:
+        pc, register, kind = site
+        shift = 0
+    elif len(site) == 4:
+        pc, register, kind, shift = site
+    else:
+        raise ValueError(f"invalid fault-site tuple {site!r}")
+    return int(pc), str(register), str(kind), int(shift)
+
+
+def generate_go(
+    database: RawMachODatabase,
+    binary_hash: bytes,
+    *,
+    build_tag: str | None = None,
+) -> str:
     disassembler = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     disassembler.detail = True
-    code = bytes(
-        database.bytes.get_byte_at(address, allow_uninitialized=True)
-        for address in range(START, STOP)
-    )
-    instructions = list(disassembler.disasm(code, START))
-    if len(instructions) != (STOP - START) // 4 or any(
-        instruction.address != START + index * 4
-        for index, instruction in enumerate(instructions)
-    ):
-        raise ValueError("oracle path is not one complete straight-line instruction range")
+    if INSTRUCTION_PATH is None:
+        code = bytes(
+            database.bytes.get_byte_at(address, allow_uninitialized=True)
+            for address in range(START, STOP)
+        )
+        instructions = list(disassembler.disasm(code, START))
+        if len(instructions) != (STOP - START) // 4 or any(
+            instruction.address != START + index * 4
+            for index, instruction in enumerate(instructions)
+        ):
+            raise ValueError("oracle path is not one complete straight-line instruction range")
+    else:
+        instructions = []
+        for address in INSTRUCTION_PATH:
+            raw = bytes(
+                database.bytes.get_byte_at(address + offset, allow_uninitialized=True)
+                for offset in range(4)
+            )
+            decoded = list(disassembler.disasm(raw, address, count=1))
+            if len(decoded) != 1 or decoded[0].address != address:
+                raise ValueError(f"cannot decode oracle instruction at {address:#x}")
+            instructions.append(decoded[0])
 
     by_pc = {instruction.address: instruction for instruction in instructions}
     site_rows = []
     for round_index in (6, 7, 8):
         values = []
-        for pc, register, kind in FAULT_SITES[round_index]:
+        for raw_site in FAULT_SITES[round_index]:
+            pc, register, kind, shift = unpack_fault_site(raw_site)
             register_number = reg_index(register)
             if kind == "index-after":
+                restore = False
+                actual_kind = "faultIndex"
+            elif kind == "index-shift":
                 restore = False
                 actual_kind = "faultIndex"
             else:
@@ -493,12 +557,15 @@ def generate_go(database: RawMachODatabase, binary_hash: bytes) -> str:
                 restore = reg_index(destination) != register_number
                 actual_kind = "faultPointer" if kind == "pointer" else "faultIndex"
             values.append(
-                "{pc: %#x, register: %d, kind: %s, restore: %s, tableBytes: 0x400, entryBytes: 4}"
-                % (pc, register_number, actual_kind, str(restore).lower())
+                "{pc: %#x, register: %d, shift: %d, kind: %s, restore: %s, tableBytes: 0x400, entryBytes: 4}"
+                % (pc, register_number, shift, actual_kind, str(restore).lower())
             )
         site_rows.append(f"\t{round_index}: {{" + ", ".join(values) + "},")
 
-    lines = [
+    lines = []
+    if build_tag:
+        lines.extend([f"//go:build {build_tag}", ""])
+    lines.extend([
         "// Code generated by generate_macos_fairplay_go_oracle.py; DO NOT EDIT.",
         "package main",
         "",
@@ -531,7 +598,7 @@ def generate_go(database: RawMachODatabase, binary_hash: bytes) -> str:
         "",
         helper_source(),
         "func runGenerated(s *state, selected fault) error {",
-    ]
+    ])
     for ordinal, instruction in enumerate(instructions):
         lines.append(f"\t// {instruction.address:#x}: {instruction.mnemonic} {instruction.op_str}")
         for statement in emit_instruction(disassembler, instruction, ordinal):
@@ -555,7 +622,8 @@ def recover_index_domains(
     disassembler.detail = True
     sites: dict[tuple[int, str], FaultSite] = {}
     for round_index, rows in FAULT_SITES.items():
-        for byte_index, (pc, register, kind) in enumerate(rows):
+        for byte_index, raw_site in enumerate(rows):
+            pc, register, kind, _shift = unpack_fault_site(raw_site)
             if kind != "index":
                 continue
             raw = database.bytes.get_dword_at(
@@ -635,12 +703,13 @@ def main() -> None:
     parser.add_argument("--memory-trace", type=Path, required=True)
     parser.add_argument("--go-output", type=Path, required=True)
     parser.add_argument("--model-output", type=Path, required=True)
+    parser.add_argument("--build-tag")
     args = parser.parse_args()
 
     with gzip.open(args.checkpoint, "rb") as stream:
         checkpoint = pickle.load(stream)
     if checkpoint.get("schema") not in {1, 2} or int(checkpoint["pc"], 16) != START:
-        raise ValueError("checkpoint is not the 26B118 oracle entry")
+        raise ValueError("checkpoint is not the configured oracle entry")
     binary = Path(checkpoint["binary"])
     binary_bytes = binary.read_bytes()
     if digest(binary_bytes) != checkpoint["binary_sha256"]:
@@ -664,7 +733,7 @@ def main() -> None:
 
     domains = recover_index_domains(args.checkpoint, database)
 
-    source = generate_go(database, binary_hash)
+    source = generate_go(database, binary_hash, build_tag=args.build_tag)
     args.go_output.parent.mkdir(parents=True, exist_ok=True)
     if args.go_output.exists():
         raise FileExistsError(args.go_output)
@@ -679,7 +748,7 @@ def main() -> None:
     )
     print(
         "fairplay_go_oracle_generated=1 "
-        f"instructions={(STOP-START)//4} pages={len(pages)} domains={len(domains)} "
+        f"instructions={len(INSTRUCTION_PATH) if INSTRUCTION_PATH is not None else (STOP-START)//4} pages={len(pages)} domains={len(domains)} "
         f"go={args.go_output} model={args.model_output}"
     )
 

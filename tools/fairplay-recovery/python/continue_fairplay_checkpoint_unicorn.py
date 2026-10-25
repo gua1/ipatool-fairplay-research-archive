@@ -464,6 +464,11 @@ def main() -> int:
         help="record read PC/address/size tuples without retaining values",
     )
     parser.add_argument("--max-memory-read-events", type=int, default=1_000_000)
+    parser.add_argument(
+        "--include-memory-read-values",
+        action="store_true",
+        help="include read values in full memory-read traces (private reports only)",
+    )
     parser.add_argument("--trace-memory-writes", action="store_true")
     parser.add_argument("--max-memory-write-events", type=int, default=1_000_000)
     parser.add_argument(
@@ -1123,6 +1128,7 @@ def main() -> int:
     memory_copy_events: list[dict[str, object]] = []
     memory_range_read_events: list[dict[str, object]] = []
     memory_range_write_events: list[dict[str, object]] = []
+    memory_event_ordinal = 0
     dispatch_table_reads: dict[tuple[int, int, int], dict[str, object]] = {}
     forced_dispatch_events: list[dict[str, object]] = []
     external_stub_addresses: set[int] = set()
@@ -2073,6 +2079,7 @@ def main() -> int:
         _value: int,
         _user: object,
     ) -> None:
+        nonlocal memory_event_ordinal
         if len(memory_read_events) >= args.max_memory_read_events:
             stop(
                 "memory-read-event-limit",
@@ -2080,13 +2087,16 @@ def main() -> int:
                 {"limit": args.max_memory_read_events},
             )
             return
-        memory_read_events.append(
-            {
-                "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
-                "address": hex(address),
-                "size": size,
-            }
-        )
+        event: dict[str, object] = {
+            "ordinal": memory_event_ordinal,
+            "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
+            "address": hex(address),
+            "size": size,
+        }
+        memory_event_ordinal += 1
+        if args.include_memory_read_values:
+            event["value"] = hex(int.from_bytes(emulator.mem_read(address, size), "little"))
+        memory_read_events.append(event)
 
     def on_all_writes(
         _uc: Uc,
@@ -2096,6 +2106,7 @@ def main() -> int:
         value: int,
         _user: object,
     ) -> None:
+        nonlocal memory_event_ordinal
         if len(memory_write_events) >= args.max_memory_write_events:
             stop(
                 "memory-write-event-limit",
@@ -2104,10 +2115,12 @@ def main() -> int:
             )
             return
         event: dict[str, object] = {
+            "ordinal": memory_event_ordinal,
             "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
             "address": hex(address),
             "size": size,
         }
+        memory_event_ordinal += 1
         if args.include_memory_write_values:
             event["value"] = hex(value & ((1 << (size * 8)) - 1))
         memory_write_events.append(event)

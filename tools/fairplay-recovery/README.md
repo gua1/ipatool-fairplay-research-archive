@@ -26,6 +26,7 @@ automatic fault-discovery features.
 | --- | --- |
 | `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
+| `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery proven for two independent enrollments; the preceding enrollment-frame producer is still research-only |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
 Only modern App Store enrollments from newly created Apple Accounts are in
@@ -195,6 +196,27 @@ first-transform, and core-oracle checkpoints automatically.
 The 26A428 Go profile is validated against 256 random ordinary inputs and 144
 faulted cases before recovery. Its complete in-process recovery takes about
 one second on the 15-core development Mac.
+
+### SIDB bulk-decoder research profile
+
+The `fairplaysidb` build tag selects a separate 26A428 evaluator for the
+unrolled SIDB block consumer at `0x10008a644..0x100090780`. It contains 5,969
+operations in the one validated path, including its fixed authenticated-branch
+detour. It does not contain an Apple Account's registers, memory, SIDB, MAC
+address, or recovered AES key; those remain in the mode-`0600` private model.
+
+The in-process Go recovery was checked against two independent accepted
+enrollments. It reproduced their earlier key hashes exactly in about 2.7 and
+3.4 seconds. Both enrollments produced byte-identical input and output
+encodings. A sixteen-case causal differential also showed that each byte of
+the preceding enrollment frame has full diffusion into the recovered key,
+while neither external encoding changes.
+
+This profile is not yet the normal `fairplay-enroll recover` path. Constructing
+its private entry model still needs the enrollment-bound frame at selected
+object offset `+0x724`. Until that producer is expressed directly, the public
+capture-to-model command continues to use the checked offline trace. Do not
+ship a recovered SIDB key as a build-global constant.
 
 Use an already recovered external model without placing it in the ipatool
 repository:
