@@ -70,9 +70,11 @@ captured license, shared-state, and ADI file. The most-specific matching path
 wins, so adding future variants cannot shadow an existing exact mapping.
 
 The companion `tools/fairplay-profile` command scans the arm64e `__text`
-section for normalized enrollment anchors. It reports exact and structural
-matches plus their rebased addresses. This profile is stored with new capture
-manifests and shown by `fairplay-doctor`, but it is deliberately non-gating:
+section for normalized enrollment anchors. It scores ordinary Mach-O function
+starts and protected handler roots recovered from authenticated dyld fixups,
+then reports exact and structural matches plus their rebased addresses. This
+profile is stored with new capture manifests and shown by `fairplay-doctor`,
+but it is deliberately non-gating:
 only successful model construction and matching-IPA validation can promote a
 recovery result.
 

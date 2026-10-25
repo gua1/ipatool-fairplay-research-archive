@@ -103,10 +103,11 @@ captured SINF/SUPF, shared-state, and ADI variants when that contract fails.
 
 `fairplay-enroll collect` also records a normalized ARM64 structural profile.
 The profiler ignores registers, immediates, and branch destinations when
-matching the protected enrollment anchors, so rebased or re-randomized builds
-can be recognized without a hash entry. Structural matches are evidence only;
-they never bypass the SINF and IPA promotion gate. A standalone inspection is
-available from the source tree:
+matching the protected enrollment anchors. It combines Mach-O function starts
+with authenticated dispatch-table roots recovered from dyld fixups, so rebased
+or re-randomized builds can be recognized without a hash entry. Structural
+matches are evidence only; they never bypass the SINF and IPA promotion gate.
+A standalone inspection is available from the source tree:
 
 ```shell
 go run ./tools/fairplay-profile --binary /path/to/fairplayd
