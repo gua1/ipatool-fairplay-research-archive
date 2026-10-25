@@ -10,22 +10,26 @@ import (
 )
 
 const (
-	mhMagic32                       = 0xfeedface
-	mhMagic64                       = 0xfeedfacf
-	mhCigam32                       = 0xcefaedfe
-	mhCigam64                       = 0xcffaedfe
-	fatMagic                        = 0xcafebabe
-	fatCigam                        = 0xbebafeca
-	fatMagic64                      = 0xcafebabf
-	fatCigam64                      = 0xbfbafeca
-	cpuTypeARM               uint32 = 0x0000000c
-	cpuTypeARM64             uint32 = 0x0100000c
-	cpuTypeARM64_32          uint32 = 0x0200000c
-	lcCodeSignature                 = 0x1d
-	lcEncryptionInfo                = 0x21
-	lcEncryptionInfo64              = 0x2c
-	csMagicEmbeddedSignature        = 0xfade0cc0
-	csMagicCodeDirectory            = 0xfade0c02
+	mhMagic32                          = 0xfeedface
+	mhMagic64                          = 0xfeedfacf
+	mhCigam32                          = 0xcefaedfe
+	mhCigam64                          = 0xcffaedfe
+	fatMagic                           = 0xcafebabe
+	fatCigam                           = 0xbebafeca
+	fatMagic64                         = 0xcafebabf
+	fatCigam64                         = 0xbfbafeca
+	cpuTypeARM                  uint32 = 0x0000000c
+	cpuTypeARM64                uint32 = 0x0100000c
+	cpuTypeARM64_32             uint32 = 0x0200000c
+	lcCodeSignature                    = 0x1d
+	lcSegment                          = 0x01
+	lcSegment64                        = 0x19
+	lcEncryptionInfo                   = 0x21
+	lcEncryptionInfo64                 = 0x2c
+	sectionAttrPureInstructions        = 0x80000000
+	sectionAttrSomeInstructions        = 0x00000400
+	csMagicEmbeddedSignature           = 0xfade0cc0
+	csMagicCodeDirectory               = 0xfade0c02
 )
 
 type machoLayout struct {
@@ -34,6 +38,27 @@ type machoLayout struct {
 	cryptID                        uint32
 	cryptIDOffset                  int
 	signatureOffset, signatureSize uint32
+	instructionRanges              []machoFileRange
+}
+
+type machoFileRange struct {
+	offset, size uint64
+}
+
+func sameMachoLayout(left, right machoLayout) bool {
+	if left.cpuType != right.cpuType || left.cpuSubtype != right.cpuSubtype ||
+		left.cryptOffset != right.cryptOffset || left.cryptSize != right.cryptSize ||
+		left.cryptID != right.cryptID || left.cryptIDOffset != right.cryptIDOffset ||
+		left.signatureOffset != right.signatureOffset || left.signatureSize != right.signatureSize ||
+		len(left.instructionRanges) != len(right.instructionRanges) {
+		return false
+	}
+	for index := range left.instructionRanges {
+		if left.instructionRanges[index] != right.instructionRanges[index] {
+			return false
+		}
+	}
+	return true
 }
 
 type machoSlice struct {
@@ -112,6 +137,47 @@ func parseThinMachO(blob []byte, totalSize uint64) (machoLayout, error) {
 			return result, fmt.Errorf("Mach-O load command has invalid size")
 		}
 		switch command {
+		case lcSegment, lcSegment64:
+			segmentHeaderSize, sectionSize, sectionCountOffset := 56, 68, 48
+			sectionFileOffset, sectionByteSize, sectionFlagsOffset := 40, 36, 56
+			if command == lcSegment64 {
+				segmentHeaderSize, sectionSize, sectionCountOffset = 72, 80, 64
+				sectionFileOffset, sectionByteSize, sectionFlagsOffset = 48, 40, 64
+			}
+			if size < segmentHeaderSize {
+				return result, fmt.Errorf("Mach-O segment command is truncated")
+			}
+			sectionCount := int(binary.LittleEndian.Uint32(blob[cursor+sectionCountOffset : cursor+sectionCountOffset+4]))
+			if sectionCount > (size-segmentHeaderSize)/sectionSize || segmentHeaderSize+sectionCount*sectionSize != size {
+				return result, fmt.Errorf("Mach-O segment section table is invalid")
+			}
+			for sectionIndex := 0; sectionIndex < sectionCount; sectionIndex++ {
+				section := blob[cursor+segmentHeaderSize+sectionIndex*sectionSize : cursor+segmentHeaderSize+(sectionIndex+1)*sectionSize]
+				flags := binary.LittleEndian.Uint32(section[sectionFlagsOffset : sectionFlagsOffset+4])
+				if flags&(sectionAttrPureInstructions|sectionAttrSomeInstructions) == 0 {
+					continue
+				}
+				offset := uint64(binary.LittleEndian.Uint32(section[sectionFileOffset : sectionFileOffset+4]))
+				var sectionBytes uint64
+				if command == lcSegment64 {
+					sectionBytes = binary.LittleEndian.Uint64(section[sectionByteSize : sectionByteSize+8])
+				} else {
+					sectionBytes = uint64(binary.LittleEndian.Uint32(section[sectionByteSize : sectionByteSize+4]))
+				}
+				if sectionBytes == 0 {
+					continue
+				}
+				if offset > totalSize || sectionBytes > totalSize-offset {
+					return result, fmt.Errorf("Mach-O instruction section exceeds file")
+				}
+				candidate := machoFileRange{offset: offset, size: sectionBytes}
+				for _, previous := range result.instructionRanges {
+					if candidate.offset < previous.offset+previous.size && previous.offset < candidate.offset+candidate.size {
+						return result, fmt.Errorf("Mach-O instruction sections overlap")
+					}
+				}
+				result.instructionRanges = append(result.instructionRanges, candidate)
+			}
 		case lcEncryptionInfo, lcEncryptionInfo64:
 			minimum := 20
 			if command == lcEncryptionInfo64 {

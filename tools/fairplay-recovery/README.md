@@ -25,7 +25,7 @@ automatic fault-discovery features.
 | Profile | Status |
 | --- | --- |
 | `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
-| `26B118` (default build) | Full capture-to-`FPSENR3` recovery is ported with natural-boundary checks; the exact fresh-account control still rejects the downloaded Windows-profile SINF |
+| `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
 Only modern App Store enrollments from newly created Apple Accounts are in
@@ -53,10 +53,10 @@ enrollment reset, selector change, or when recovering from another fairplayd
 build. Treat the checkpoint, oracle model, recovered JSON, and final enrollment
 pack as private secrets.
 
-For 26B118, a model is published as `fairplay-enrollment.bin` only after the
-matching downloaded IPA passes every decryption check. The known external
-fresh-account control currently reaches and validates the complete recovered
-codec but fails that final profile check, so its output remains
+For 26B118, pass the exact checked 26A428 arm64e fairplayd image with
+`--compat-fairplayd`. It is used only as an offline evaluator and is not
+bundled. A model is published as `fairplay-enrollment.bin` only after the
+matching downloaded IPA passes every decryption check; failed output remains
 `fairplay-enrollment.candidate.bin` and must not be used.
 
 ## Normal workflow

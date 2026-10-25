@@ -238,6 +238,11 @@ func inspectIPASINFs(path string) ([]SINFDiagnostic, error) {
 	return result, nil
 }
 
+func modelMatchesCaptureBuild(modelHash string, capture *EnrollmentCaptureManifest) bool {
+	return capture == nil || modelHash == capture.FairPlayd.SHA256 ||
+		capture.FairPlay.CompatibilitySHA256 != "" && modelHash == capture.FairPlay.CompatibilitySHA256
+}
+
 func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport {
 	report := FairPlayDoctorReport{
 		Schema: "ipatool-fairplay-doctor-v1", CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -272,8 +277,8 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			report.CaptureVerified = true
 			report.Checks["capture_integrity"] = true
 			report.Checks["supported_fairplayd"] = capture.FairPlay.Recovery
-			if !capture.FairPlay.Decrypt {
-				report.Warnings = append(report.Warnings, "this exact build has recovery tooling but is not supported for IPA decryption; the known downloaded Windows-profile SINF remains incompatible, and recovery is accepted only if the matching IPA fully decrypts and verifies")
+			if capture.FairPlay.CompatibilitySHA256 != "" && modelPath == "" {
+				report.Warnings = append(report.Warnings, "this capture requires the checked compatibility evaluator; pass --compat-fairplayd with arm64e SHA-256 "+capture.FairPlay.CompatibilitySHA256+" to fairplay-enroll recover")
 			}
 			if ipaPath == "" && capture.IPA != nil {
 				resolved, resolveErr := captureFilePath(capturePath, capture.IPA.Path)
@@ -320,7 +325,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			selectors[value.SelectorID] = true
 		}
 		for _, model := range report.Models {
-			buildMatches := captureManifest == nil || model.FairPlaydHash == captureManifest.FairPlayd.SHA256
+			buildMatches := modelMatchesCaptureBuild(model.FairPlaydHash, captureManifest)
 			if model.SelectorID != "" && selectors[model.SelectorID] && buildMatches {
 				report.CompatibleModel = model.Path
 				break
@@ -349,7 +354,11 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 	} else if !captureManifest.FairPlay.Recovery {
 		report.NextActions = append(report.NextActions, "add and validate an exact evaluator for this fairplayd hash")
 	} else if modelPath == "" {
-		report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover")
+		if captureManifest.FairPlay.CompatibilitySHA256 != "" {
+			report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover --compat-fairplayd /private/path/fairplayd.arm64e")
+		} else {
+			report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover")
+		}
 	}
 	if modelPath != "" && report.CompatibleModel != "" {
 		report.NextActions = append(report.NextActions, "run fairplay-decrypt with the compatible model")

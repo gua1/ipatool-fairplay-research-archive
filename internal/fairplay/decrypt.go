@@ -20,7 +20,10 @@ import (
 	"golang.org/x/arch/arm64/arm64asm"
 )
 
-const pageBytes = 4096
+const (
+	pageBytes                            = 4096
+	minimumARM64InstructionValidPercent = 90
+)
 
 type encryptedImage struct {
 	member, supfMember string
@@ -321,6 +324,32 @@ func decryptPagesInPlace(output []byte, image encryptedImage, records [][32]byte
 	return keys, nil
 }
 
+func auditARM64FirstPage(page []byte, pageOffset uint64, ranges []machoFileRange) (int, int, map[string]int) {
+	if len(ranges) == 0 {
+		valid, mnemonics := auditARM64(page)
+		return valid, len(page) / 4, mnemonics
+	}
+	pageEnd := pageOffset + uint64(len(page))
+	valid, words := 0, 0
+	mnemonics := make(map[string]int)
+	for _, section := range ranges {
+		start := max(pageOffset, section.offset)
+		end := min(pageEnd, section.offset+section.size)
+		start = (start + 3) &^ 3
+		end &^= 3
+		if start >= end {
+			continue
+		}
+		observed, counts := auditARM64(page[start-pageOffset : end-pageOffset])
+		valid += observed
+		words += int((end - start) / 4)
+		for mnemonic, count := range counts {
+			mnemonics[mnemonic] += count
+		}
+	}
+	return valid, words, mnemonics
+}
+
 func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask [16]byte, deriver *pageKeyDeriver) (*imageReport, error) {
 	if image.layout.cryptID != 1 {
 		return nil, fmt.Errorf("%s: expected cryptid 1", image.member)
@@ -354,11 +383,13 @@ func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask 
 	}
 	clear(keys)
 	first := output[start : start+pageBytes]
-	valid, mnemonics := 0, map[string]int(nil)
+	valid, instructionWords, mnemonics := 0, 0, map[string]int(nil)
+	structurallyPlausible := false
 	if isARM64InstructionSet(image.layout.cpuType) {
-		valid, mnemonics = auditARM64(first)
-		if valid < 900 {
-			return nil, fmt.Errorf("%s: first page has only %d/1024 valid ARM64 words", image.member, valid)
+		valid, instructionWords, mnemonics = auditARM64FirstPage(first, uint64(start), image.layout.instructionRanges)
+		structurallyPlausible = instructionWords > 0 && valid*100 >= instructionWords*minimumARM64InstructionValidPercent
+		if !structurallyPlausible {
+			return nil, fmt.Errorf("%s: first executable page has only %d/%d valid ARM64 words", image.member, valid, instructionWords)
 		}
 	}
 	binary.LittleEndian.PutUint32(output[id:id+4], 0)
@@ -375,13 +406,13 @@ func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask 
 		EncryptedSHA256: hex.EncodeToString(encryptedDigest[:]), DecryptedSHA256: hex.EncodeToString(decryptedDigest[:]),
 		CryptOffset: image.layout.cryptOffset, CryptSize: image.layout.cryptSize, Pages: len(records),
 		FirstPlaintextPageSHA256: digest(first), FirstPageValidARM64Words: valid,
-		FirstPageStructurallyPlausible: isARM64InstructionSet(image.layout.cpuType), FirstPageMnemonics: mnemonics,
+		FirstPageStructurallyPlausible: structurallyPlausible, FirstPageMnemonics: mnemonics,
 		OrderedPageKeysSHA256: hex.EncodeToString(keysHash.Sum(nil)), AppMaskSHA256: digest(mask[:]),
 		CodeDirectories: audits, CryptIDBefore: 1, CryptIDAfter: 0, ExactMutationScope: true,
 	}
 	if isARM64InstructionSet(image.layout.cpuType) {
 		report.FirstPageAudit = "arm64-instruction-decode"
-		report.FirstPageInstructionWords = 1024
+		report.FirstPageInstructionWords = instructionWords
 	} else {
 		report.FirstPageAudit = "not-performed"
 	}
@@ -407,7 +438,7 @@ func validateInventoriedImages(blob []byte, images []encryptedImage) error {
 	}
 	for index, slice := range encrypted {
 		image := images[index]
-		if slice.offset != image.sliceOffset || slice.size != image.sliceSize || slice.layout != image.layout {
+		if slice.offset != image.sliceOffset || slice.size != image.sliceSize || !sameMachoLayout(slice.layout, image.layout) {
 			return fmt.Errorf("encrypted slice %d changed after inventory", index)
 		}
 	}

@@ -483,6 +483,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capture", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--compat-fairplayd",
+        type=Path,
+        help="exact checked 26A428 arm64e fairplayd used with a 26B118 capture",
+    )
+    parser.add_argument(
+        "--native-26b-research",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--skip-differential", action="store_true")
     args = parser.parse_args()
     capture = args.capture.resolve()
@@ -494,7 +504,17 @@ def main() -> None:
     try:
         manifest = load_capture(capture)
         ipa = capture_file(capture, manifest["ipa"]["path"])
-        fairplayd = capture_file(capture, manifest["fairplayd"]["path"])
+        capture_fairplayd = capture_file(capture, manifest["fairplayd"]["path"])
+        fairplayd = capture_fairplayd
+        capture_build_hash = manifest["fairplayd"]["sha256"]
+        if args.compat_fairplayd is not None:
+            if capture_build_hash != BUILD_HASH_26B118:
+                raise ValueError("--compat-fairplayd is only valid for a 26B118 capture")
+            fairplayd = args.compat_fairplayd.resolve()
+            if not fairplayd.is_file() or digest(fairplayd) != BUILD_HASH_26A428:
+                raise ValueError(
+                    "compatibility fairplayd is not the checked 26A428 arm64e image"
+                )
         iomac = capture_file(capture, manifest["hardware_iomac"]["path"])
         installed_sinf = capture_file(capture, manifest["app"]["sinf_path"])
         target_sinf = capture_file(
@@ -505,7 +525,12 @@ def main() -> None:
         state = capture / "state"
         supf_member, legacy_member, executable_member = ipa_members(ipa, manifest)
 
-        if manifest["fairplayd"]["sha256"] == BUILD_HASH_26B118:
+        if capture_build_hash == BUILD_HASH_26B118 and args.compat_fairplayd is None:
+            if not args.native_26b_research:
+                raise ValueError(
+                    "26B118 downloaded-SINF recovery requires --compat-fairplayd "
+                    f"with arm64e SHA-256 {BUILD_HASH_26A428}"
+                )
             recover_26b118(
                 capture=capture,
                 output=output,
@@ -648,7 +673,11 @@ def main() -> None:
             "success": True,
             "capture_manifest_sha256": digest(capture / "manifest.json"),
             "selector": manifest["app"]["selector_id"],
-            "fairplayd_sha256": manifest["fairplayd"]["sha256"],
+            "fairplayd_sha256": digest(fairplayd),
+            "capture_fairplayd_sha256": capture_build_hash,
+            "compatibility_profile": (
+                "macos26a428" if capture_build_hash != digest(fairplayd) else None
+            ),
             "enrollment_model": str(enrollment),
             "enrollment_model_sha256": digest(enrollment),
             "decrypted_ipa": str(decrypted),

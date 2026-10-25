@@ -243,6 +243,47 @@ func TestMachOEncryptionClassification(t *testing.T) {
 	}
 }
 
+func TestMachOInstructionSectionInventory(t *testing.T) {
+	blob := make([]byte, 32)
+	binary.LittleEndian.PutUint32(blob, mhMagic64)
+	binary.LittleEndian.PutUint32(blob[4:], cpuTypeARM64)
+	segment := make([]byte, 72+80)
+	binary.LittleEndian.PutUint32(segment, lcSegment64)
+	binary.LittleEndian.PutUint32(segment[4:], uint32(len(segment)))
+	binary.LittleEndian.PutUint32(segment[64:], 1)
+	section := segment[72:]
+	copy(section[:16], "__text")
+	copy(section[16:32], "__TEXT")
+	binary.LittleEndian.PutUint64(section[40:], 0x280)
+	binary.LittleEndian.PutUint32(section[48:], 0x1180)
+	binary.LittleEndian.PutUint32(section[64:], sectionAttrPureInstructions|sectionAttrSomeInstructions)
+	blob = append(blob, segment...)
+
+	encryption := make([]byte, 24)
+	binary.LittleEndian.PutUint32(encryption, lcEncryptionInfo64)
+	binary.LittleEndian.PutUint32(encryption[4:], uint32(len(encryption)))
+	binary.LittleEndian.PutUint32(encryption[8:], 4096)
+	binary.LittleEndian.PutUint32(encryption[12:], 4096)
+	binary.LittleEndian.PutUint32(encryption[16:], 1)
+	blob = append(blob, encryption...)
+	signature := make([]byte, 16)
+	binary.LittleEndian.PutUint32(signature, lcCodeSignature)
+	binary.LittleEndian.PutUint32(signature[4:], uint32(len(signature)))
+	binary.LittleEndian.PutUint32(signature[8:], 8192)
+	binary.LittleEndian.PutUint32(signature[12:], 12)
+	blob = append(blob, signature...)
+	binary.LittleEndian.PutUint32(blob[16:], 3)
+	binary.LittleEndian.PutUint32(blob[20:], uint32(len(blob)-32))
+
+	layout, err := parseThinMachO(blob, 8204)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layout.instructionRanges) != 1 || layout.instructionRanges[0] != (machoFileRange{offset: 0x1180, size: 0x280}) {
+		t.Fatalf("unexpected instruction ranges: %#v", layout.instructionRanges)
+	}
+}
+
 func TestUniversalMachOEncryptionClassification(t *testing.T) {
 	blob := fatARMFixture(t)
 	slices, err := parseMachOSlices(blob, uint64(len(blob)))

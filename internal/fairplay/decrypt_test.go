@@ -37,6 +37,23 @@ func TestSupplementalARM64MnemonicRejectsNearbyUnallocatedEncodings(t *testing.T
 	}
 }
 
+func TestAuditARM64FirstPageUsesInstructionSections(t *testing.T) {
+	page := bytes.Repeat([]byte{0xff}, pageBytes)
+	const instructionOffset = 0x180
+	const instructionBytes = 0x280
+	for offset := instructionOffset; offset < instructionOffset+instructionBytes; offset += 4 {
+		binary.LittleEndian.PutUint32(page[offset:offset+4], 0xd503201f) // nop
+	}
+	valid, words, mnemonics := auditARM64FirstPage(
+		page,
+		0x4000,
+		[]machoFileRange{{offset: 0x4000 + instructionOffset, size: instructionBytes}},
+	)
+	if valid != instructionBytes/4 || words != instructionBytes/4 || mnemonics["NOP"] != instructionBytes/4 {
+		t.Fatalf("section audit = valid %d, words %d, mnemonics %#v", valid, words, mnemonics)
+	}
+}
+
 func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
 	blob, layout := signedAuditFixture(t, pageBytes, 2*pageBytes, 12, 2)
 	layout.cpuType = cpuTypeARM64

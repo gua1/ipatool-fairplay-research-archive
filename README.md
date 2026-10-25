@@ -88,7 +88,7 @@ selector in the downloaded IPA.
 | Host/FairPlay profile | Recovery status | End-to-end IPA status |
 | --- | --- | --- |
 | macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the `macos26a428` binary profile | Proven with a modern account and matching selector |
-| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Capture-to-checkpoint, Go oracle, AES recovery, and `FPSENR3` construction are ported | Not yet supported for IPA decryption; the exact fresh-account control rejects the downloaded Windows-profile SINF |
+| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Supported through the checked `macos26a428` offline compatibility evaluator | Proven with an external fresh-account control: 39 images and 10,080 pages |
 | Any other fairplayd arm64e hash | Unsupported | A new evaluator and differential validation are required |
 
 The fairplayd arm64e slice hash is authoritative. The macOS host build and the
@@ -207,18 +207,23 @@ Recovery still cannot reconstruct missing enrollment from only an IPA, SINF,
 SIDB, MAC address, or Apple Account password—the complete capture bundle is
 required.
 
-The 26B118 path additionally proves every intermediate checkpoint address.
-It stops at the first enrollment mismatch instead of advancing a failed
-checkpoint to a later address. Until a recovered 26B118 candidate passes the
-final IPA and CodeDirectory checks, `fairplay-doctor` reports the build as
-`recovery-supported`, not end-to-end proven.
+The native 26B118 `FPSENR3` consumer is not the consumer used by downloaded
+Windows-profile SINF files. For a 26B118 capture, recovery therefore uses the
+checked 26A428 CBC consumer as an offline compatibility evaluator. Supply its
+exact arm64e fairplayd image (SHA-256 `1e58d37e…e4ea1784`); the Apple binary is
+not bundled with ipatool:
 
-The retained fresh-account 26B118 control reaches every natural boundary,
-matches the Go oracle in all 144 differential cases, and reproduces the prior
-`FPSENR3` model. Its Windows-profile downloaded IPA still rejects that model,
-so the command leaves only an explicitly named candidate and exits with an
-error. This is a remaining profile/consumer boundary, not an AES-recovery
-failure.
+```shell
+ipatool fairplay-enroll recover \
+  --capture /private/path/App.capture \
+  --compat-fairplayd /private/path/fairplayd-26A428.arm64e \
+  --output /private/path/App.recovery
+```
+
+The evaluator is never installed or executed natively. Every intermediate
+checkpoint, recovered SINF plaintext, decrypted Mach-O, and mutation boundary
+must validate before the candidate model is promoted to
+`fairplay-enrollment.bin`.
 
 The resulting `fairplay-enrollment.bin` is normally reusable for IPAs
 personalized to the same account enrollment and selector. Generate a new one
@@ -279,6 +284,10 @@ model: both contain private account-derived key material.
      --capture /private/path/App.capture \
      --output /private/path/App.recovery
    ```
+
+   Add `--compat-fairplayd /private/path/fairplayd-26A428.arm64e` when
+   `fairplay-doctor` reports that a 26B118 capture requires the compatibility
+   evaluator.
 
    This executes the build-specific static trace, derives the internal
    checkpoints, validates the generated Go oracle, performs the Go AES

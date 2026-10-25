@@ -30,11 +30,13 @@ const (
 )
 
 type FairPlayBuildSupport struct {
-	Profile  string `json:"profile"`
-	Build    string `json:"build"`
-	Status   string `json:"status"`
-	Recovery bool   `json:"recovery"`
-	Decrypt  bool   `json:"end_to_end_decryption"`
+	Profile              string `json:"profile"`
+	Build                string `json:"build"`
+	Status               string `json:"status"`
+	Recovery             bool   `json:"recovery"`
+	Decrypt              bool   `json:"end_to_end_decryption"`
+	CompatibilityProfile string `json:"compatibility_profile,omitempty"`
+	CompatibilitySHA256  string `json:"compatibility_fairplayd_sha256,omitempty"`
 }
 
 var supportedFairPlayHashes = map[string]FairPlayBuildSupport{
@@ -42,7 +44,8 @@ var supportedFairPlayHashes = map[string]FairPlayBuildSupport{
 		Profile: "macos26a428", Build: "26A428", Status: "supported", Recovery: true, Decrypt: true,
 	},
 	FairPlayBuild26B118Hash: {
-		Profile: "macos26b118", Build: "26B118", Status: "recovery-supported", Recovery: true, Decrypt: false,
+		Profile: "macos26b118", Build: "26B118", Status: "supported-with-compatibility", Recovery: true, Decrypt: true,
+		CompatibilityProfile: "macos26a428", CompatibilitySHA256: FairPlayBuild26A428Hash,
 	},
 }
 
@@ -723,6 +726,11 @@ func LoadEnrollmentCapture(path string, verify bool) (EnrollmentCaptureManifest,
 	}
 	if manifest.Schema != EnrollmentCaptureSchema {
 		return manifest, fmt.Errorf("unsupported enrollment capture schema %q", manifest.Schema)
+	}
+	if support, ok := LookupFairPlayBuild(manifest.FairPlayd.SHA256); ok {
+		manifest.FairPlay = support
+	} else {
+		manifest.FairPlay = FairPlayBuildSupport{Build: manifest.BuildVersion, Status: "unsupported"}
 	}
 	if !verify {
 		return manifest, nil

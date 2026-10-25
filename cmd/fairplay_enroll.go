@@ -61,6 +61,7 @@ type fairplayRecoverOptions struct {
 	Capture          string
 	Output           string
 	Script           string
+	CompatFairPlayd  string
 	SkipDifferential bool
 }
 
@@ -101,6 +102,9 @@ func runFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverO
 		"run", "--with", "capstone", "--with", "unicorn", "--with", "pycryptodome",
 		"python", script, "--capture", options.Capture, "--output-dir", options.Output,
 	}
+	if options.CompatFairPlayd != "" {
+		arguments = append(arguments, "--compat-fairplayd", options.CompatFairPlayd)
+	}
 	if options.SkipDifferential {
 		arguments = append(arguments, "--skip-differential")
 	}
@@ -126,6 +130,7 @@ func fairplayEnrollRecoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&options.Capture, "capture", "", "Private capture directory from fairplay-enroll collect (required)")
 	cmd.Flags().StringVar(&options.Output, "output", "", "New private recovery output directory (required)")
 	cmd.Flags().StringVar(&options.Script, "script", "", "Explicit recover_capture.py path")
+	cmd.Flags().StringVar(&options.CompatFairPlayd, "compat-fairplayd", "", "Exact checked 26A428 arm64e fairplayd used to recover a 26B118 capture")
 	cmd.Flags().BoolVar(&options.SkipDifferential, "skip-differential", false, "Skip the Unicorn differential (unsafe except for development regression)")
 	_ = cmd.MarkFlagRequired("capture")
 	_ = cmd.MarkFlagRequired("output")

@@ -77,9 +77,22 @@ func TestFairPlayBuildRecoverySupport(t *testing.T) {
 	if !ok || !stable.Recovery || !stable.Decrypt {
 		t.Fatalf("26A428 support = %#v, %v", stable, ok)
 	}
-	research, ok := LookupFairPlayBuild(FairPlayBuild26B118Hash)
-	if !ok || !research.Recovery || research.Decrypt || research.Status != "recovery-supported" {
-		t.Fatalf("26B118 support = %#v, %v", research, ok)
+	compat, ok := LookupFairPlayBuild(FairPlayBuild26B118Hash)
+	if !ok || !compat.Recovery || !compat.Decrypt || compat.Status != "supported-with-compatibility" || compat.CompatibilitySHA256 != FairPlayBuild26A428Hash {
+		t.Fatalf("26B118 support = %#v, %v", compat, ok)
+	}
+}
+
+func TestCompatibilityModelMatchesCaptureBuild(t *testing.T) {
+	capture := &EnrollmentCaptureManifest{
+		FairPlayd: EnrollmentCaptureFile{SHA256: FairPlayBuild26B118Hash},
+		FairPlay:  supportedFairPlayHashes[FairPlayBuild26B118Hash],
+	}
+	if !modelMatchesCaptureBuild(FairPlayBuild26A428Hash, capture) {
+		t.Fatal("checked compatibility model did not match the 26B118 capture")
+	}
+	if modelMatchesCaptureBuild("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", capture) {
+		t.Fatal("unrelated model matched the compatibility capture")
 	}
 }
 
@@ -95,7 +108,9 @@ func TestLoadEnrollmentCaptureIntegrity(t *testing.T) {
 	}
 	digest := sha256.Sum256(private)
 	manifest := EnrollmentCaptureManifest{
-		Schema: EnrollmentCaptureSchema,
+		Schema:    EnrollmentCaptureSchema,
+		FairPlayd: EnrollmentCaptureFile{SHA256: FairPlayBuild26B118Hash},
+		FairPlay:  FairPlayBuildSupport{Status: "stale-research-only"},
 		Files: []EnrollmentCaptureFile{{
 			Path: "private.bin", Bytes: int64(len(private)), SHA256: hex.EncodeToString(digest[:]), Mode: "0600",
 		}},
@@ -107,8 +122,12 @@ func TestLoadEnrollmentCaptureIntegrity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadEnrollmentCapture(directory, true); err != nil {
+	loaded, err := LoadEnrollmentCapture(directory, true)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if loaded.FairPlay.Status != "supported-with-compatibility" || loaded.FairPlay.CompatibilitySHA256 != FairPlayBuild26A428Hash {
+		t.Fatalf("capture support metadata was not refreshed: %#v", loaded.FairPlay)
 	}
 	if err := os.WriteFile(privatePath, []byte("changed"), 0o600); err != nil {
 		t.Fatal(err)
