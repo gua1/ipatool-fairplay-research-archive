@@ -97,6 +97,9 @@ func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, 
 		if err != nil {
 			return fmt.Errorf("read raw source file %q: %w", path, err)
 		}
+		if _, exists := runtime.files[suffix]; exists {
+			return fmt.Errorf("duplicate raw source file mapping %q", suffix)
+		}
 		runtime.files[suffix] = data
 	}
 	if macPath != "" {
@@ -134,12 +137,14 @@ func (r *rawSourceRuntime) allocate(s *state, size uint64) (uint64, error) {
 }
 
 func (r *rawSourceRuntime) matchingFile(path string) (string, []byte, bool) {
+	bestSuffix := ""
+	var bestData []byte
 	for suffix, data := range r.files {
-		if strings.HasSuffix(path, suffix) {
-			return suffix, data, true
+		if strings.HasSuffix(path, suffix) && len(suffix) > len(bestSuffix) {
+			bestSuffix, bestData = suffix, data
 		}
 	}
-	return "", nil, false
+	return bestSuffix, bestData, bestSuffix != ""
 }
 
 func (r *rawSourceRuntime) writeStat(s *state, address uint64, size int) error {

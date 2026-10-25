@@ -63,6 +63,12 @@ workflow. A model is published as `fairplay-enrollment.bin` only after the
 matching downloaded IPA passes every decryption check; failed output remains
 `fairplay-enrollment.candidate.bin` and must not be used.
 
+Captured files are exposed through a deterministic virtual filesystem. The
+first attempt uses only the proven installed SINF/SUPFs and fpsd `SC Info.*`
+state. If that path cannot derive a candidate, recovery retries with every
+captured license, shared-state, and ADI file. The most-specific matching path
+wins, so adding future variants cannot shadow an existing exact mapping.
+
 ## Normal workflow
 
 Run the public commands from the ipatool source tree:

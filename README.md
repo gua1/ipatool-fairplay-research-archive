@@ -98,6 +98,8 @@ the validated macOS `26A434` installation contains the checked `26A428`
 fairplayd slice. For an unknown hash, `fairplay-doctor` reports a portable
 recovery candidate. Recovery uses the captured state as runtime data and
 publishes no model unless the complete SINF and matching IPA pass validation.
+It first uses the smallest proven license/state set, then retries with all
+captured SINF/SUPF, shared-state, and ADI variants when that contract fails.
 
 The experimental `fairplay-decrypt` command currently runs only on macOS and
 Linux because it enforces Unix private-file permissions. The standalone Go
