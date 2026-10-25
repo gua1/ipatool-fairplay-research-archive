@@ -1,7 +1,9 @@
 # Go FairPlay white-box recovery
 
-This is a build-specific, generated evaluator for the recovered macOS 26B118
-FairPlay AES white-box boundary `0x100221894..0x100223a30`.
+This directory contains generated FairPlay evaluators and the portable
+current-SINF enrollment path. The generated internals come from checked Apple
+builds, but the default recovery command treats the captured daemon hash as
+provenance rather than an allowlist.
 
 The default 26B118 path is exactly 2,151 straight-line ARM64 instructions. The
 26A428 profile contains 2,153 traced operations plus two fixed authenticated
@@ -29,12 +31,12 @@ automatic fault-discovery features.
 | `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery with an embedded sanitized build model; a private 16-byte enrollment frame is supplied at runtime |
 | `26A428` frame evaluator (`-tags fairplayframe`) | Pure-Go direct evaluator with an embedded sanitized build model; exact across two independent enrollment inputs |
 | `26A428` state-slot evaluator (`-tags fairplaystate`) | Pure-Go 14-slot transform with an embedded sanitized build model; every retained native slot matches across two enrollments |
-| All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
+| Other arm64e fairplayd builds using the current SINF/state contract | Attempted through the portable evaluator; accepted only after complete SINF and matching-IPA validation |
 
 Modern enrollments and the preserved older `bbbbbbbb:00000005` layout are in
 scope. Other legacy or migrated layouts remain unproven. Do not infer support
-from the macOS product version alone: the exact build and fairplayd SHA-256
-must match.
+from the macOS product version or daemon hash alone: unknown builds are
+compatibility candidates until a matching capture passes end-to-end recovery.
 
 ## What the private model represents
 
@@ -52,13 +54,12 @@ attaches to the live fairplayd process or provisions an Apple Account.
 
 The recovered enrollment pack can be reused for matching IPAs while the
 account enrollment and SINF selector remain unchanged. Recapture after an
-enrollment reset, selector change, or when recovering from another fairplayd
-build. Treat the checkpoint, oracle model, recovered JSON, and final enrollment
-pack as private secrets.
+enrollment reset or selector change. Treat the checkpoint, oracle model,
+recovered JSON, and final enrollment pack as private secrets.
 
-For 26B118, pass the exact checked 26A428 arm64e fairplayd image with
-`--compat-fairplayd`. It is used only as an offline evaluator and is not
-bundled. A model is published as `fairplay-enrollment.bin` only after the
+The default pure-Go path automatically uses the embedded portable evaluator;
+`--compat-fairplayd` applies only to the explicitly selected legacy Python
+workflow. A model is published as `fairplay-enrollment.bin` only after the
 matching downloaded IPA passes every decryption check; failed output remains
 `fairplay-enrollment.candidate.bin` and must not be used.
 

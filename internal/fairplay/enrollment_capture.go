@@ -54,6 +54,31 @@ func LookupFairPlayBuild(hash string) (FairPlayBuildSupport, bool) {
 	return result, ok
 }
 
+// ResolveFairPlayBuildSupport returns exact validation metadata for known
+// builds and a fail-closed portable recovery candidate for every other build.
+// The portable path does not execute the captured daemon. It consumes the
+// captured enrollment inputs with the embedded evaluator and promotes a model
+// only after complete SINF and IPA validation succeeds.
+func ResolveFairPlayBuildSupport(hash, build string) (FairPlayBuildSupport, bool) {
+	if support, ok := LookupFairPlayBuild(hash); ok {
+		return support, true
+	}
+	normalized := strings.ToLower(hash)
+	decoded, err := hex.DecodeString(normalized)
+	if err != nil || len(decoded) != sha256.Size {
+		return FairPlayBuildSupport{Build: build, Status: "invalid-fairplayd-identity"}, false
+	}
+	return FairPlayBuildSupport{
+		Profile:              "portable-current-sinf",
+		Build:                build,
+		Status:               "portable-validation-required",
+		Recovery:             true,
+		Decrypt:              false,
+		CompatibilityProfile: "macos26a428",
+		CompatibilitySHA256:  FairPlayBuild26A428Hash,
+	}, false
+}
+
 type EnrollmentCaptureFile struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
@@ -566,10 +591,7 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 	}
 	fairplayd = relativeCaptureFile(options.OutputPath, fairplayd)
 	files = append(files, fairplayd)
-	support, known := LookupFairPlayBuild(fairplayd.SHA256)
-	if !known {
-		support = FairPlayBuildSupport{Build: options.BuildVersion, Status: "unsupported"}
-	}
+	support, known := ResolveFairPlayBuildSupport(fairplayd.SHA256, options.BuildVersion)
 
 	var mac []byte
 	if options.MACAddressPath != "" {
@@ -676,7 +698,8 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 		manifest.Warnings = append(manifest.Warnings, "capture has no IPA; recovery requires a matching personalized IPA")
 	}
 	if !known {
-		manifest.Warnings = append(manifest.Warnings, "fairplayd hash is not supported")
+		manifest.Warnings = append(manifest.Warnings,
+			"fairplayd hash is not independently verified; portable recovery requires complete SINF and IPA validation")
 	}
 	if err := writePrivateJSON(filepath.Join(options.OutputPath, "manifest.json"), manifest); err != nil {
 		return EnrollmentCaptureManifest{}, err
@@ -727,11 +750,7 @@ func LoadEnrollmentCapture(path string, verify bool) (EnrollmentCaptureManifest,
 	if manifest.Schema != EnrollmentCaptureSchema {
 		return manifest, fmt.Errorf("unsupported enrollment capture schema %q", manifest.Schema)
 	}
-	if support, ok := LookupFairPlayBuild(manifest.FairPlayd.SHA256); ok {
-		manifest.FairPlay = support
-	} else {
-		manifest.FairPlay = FairPlayBuildSupport{Build: manifest.BuildVersion, Status: "unsupported"}
-	}
+	manifest.FairPlay, _ = ResolveFairPlayBuildSupport(manifest.FairPlayd.SHA256, manifest.BuildVersion)
 	if !verify {
 		return manifest, nil
 	}

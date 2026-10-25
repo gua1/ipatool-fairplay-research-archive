@@ -82,6 +82,19 @@ func TestFairPlayBuildRecoverySupport(t *testing.T) {
 	}
 }
 
+func TestUnknownFairPlayBuildUsesPortableValidation(t *testing.T) {
+	const unknownHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	support, known := ResolveFairPlayBuildSupport(unknownHash, "future-build")
+	if known || !support.Recovery || support.Decrypt || support.Status != "portable-validation-required" ||
+		support.CompatibilitySHA256 != FairPlayBuild26A428Hash {
+		t.Fatalf("unknown build support = %#v, known=%v", support, known)
+	}
+	invalid, known := ResolveFairPlayBuildSupport("not-a-sha256", "future-build")
+	if known || invalid.Recovery || invalid.Status != "invalid-fairplayd-identity" {
+		t.Fatalf("invalid build support = %#v, known=%v", invalid, known)
+	}
+}
+
 func TestCompatibilityModelMatchesCaptureBuild(t *testing.T) {
 	capture := &EnrollmentCaptureManifest{
 		FairPlayd: EnrollmentCaptureFile{SHA256: FairPlayBuild26B118Hash},

@@ -92,11 +92,7 @@ func InspectLocalFairPlayHost() (FairPlayHostDiagnostic, error) {
 	if err != nil {
 		return result, err
 	}
-	if support, ok := LookupFairPlayBuild(result.FairPlaydSHA256); ok {
-		result.FairPlaySupport = support
-	} else {
-		result.FairPlaySupport = FairPlayBuildSupport{Build: result.BuildVersion, Status: "unsupported"}
-	}
+	result.FairPlaySupport, _ = ResolveFairPlayBuildSupport(result.FairPlaydSHA256, result.BuildVersion)
 	entries, stateErr := os.ReadDir("/private/var/db/fpsd/SC Info")
 	if stateErr == nil {
 		result.StateAccessible = true
@@ -335,7 +331,14 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 	if capturePath == "" {
 		if host, err := InspectLocalFairPlayHost(); err == nil {
 			report.Host = &host
-			report.Checks["supported_fairplayd"] = host.FairPlaySupport.Recovery
+			report.Checks["supported_fairplayd"] = host.FairPlaySupport.Decrypt
+			report.Checks["portable_recovery_available"] = host.FairPlaySupport.Recovery
+			report.Checks["verified_fairplayd"] = host.FairPlaySupport.Decrypt
+			if host.FairPlaySupport.Recovery && !host.FairPlaySupport.Decrypt {
+				report.Checks["portable_recovery_candidate"] = true
+				report.Warnings = append(report.Warnings,
+					"this fairplayd hash is not independently verified; collect a matching IPA and require complete recovery validation")
+			}
 			report.Checks["native_state_accessible"] = host.StateAccessible && host.StateFiles != 0
 			report.Checks["hardware_iomac"] = host.HardwareMACPresent
 		} else if ipaPath == "" && modelPath == "" {
@@ -359,9 +362,13 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			}
 			report.CaptureVerified = true
 			report.Checks["capture_integrity"] = true
-			report.Checks["supported_fairplayd"] = capture.FairPlay.Recovery
-			if capture.FairPlay.CompatibilitySHA256 != "" && modelPath == "" {
-				report.Warnings = append(report.Warnings, "this capture requires the checked compatibility evaluator; pass --compat-fairplayd with arm64e SHA-256 "+capture.FairPlay.CompatibilitySHA256+" to fairplay-enroll recover")
+			report.Checks["supported_fairplayd"] = capture.FairPlay.Decrypt
+			report.Checks["portable_recovery_available"] = capture.FairPlay.Recovery
+			report.Checks["verified_fairplayd"] = capture.FairPlay.Decrypt
+			if capture.FairPlay.Recovery && !capture.FairPlay.Decrypt {
+				report.Checks["portable_recovery_candidate"] = true
+				report.Warnings = append(report.Warnings,
+					"this fairplayd hash is not independently verified; recovery will use the portable evaluator and promote a model only after complete SINF and IPA validation")
 			}
 			if ipaPath == "" && capture.IPA != nil {
 				resolved, resolveErr := captureFilePath(capturePath, capture.IPA.Path)
@@ -441,24 +448,18 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			report.NextActions = append(report.NextActions, "rerun collection with permission to read /private/var/db/fpsd")
 		}
 		report.NextActions = append(report.NextActions, "collect native enrollment with fairplay-enroll collect")
-	} else if !captureManifest.FairPlay.Recovery {
-		report.NextActions = append(report.NextActions, "add and validate an exact evaluator for this fairplayd hash")
 	} else if modelPath == "" {
-		if captureManifest.FairPlay.CompatibilitySHA256 != "" {
-			report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover --compat-fairplayd /private/path/fairplayd.arm64e")
-		} else {
-			report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover")
-		}
+		report.NextActions = append(report.NextActions, "recover fairplay-enrollment.bin with fairplay-enroll recover")
 	}
 	if modelPath != "" && report.CompatibleModel != "" {
 		report.NextActions = append(report.NextActions, "run fairplay-decrypt with the compatible model")
 	}
 	if len(report.SINF) != 0 || captureManifest != nil || modelPath != "" {
 		report.Ready = len(report.Errors) == 0 && report.Checks["current_sinf_layout"] &&
-			(captureManifest == nil || report.Checks["capture_integrity"] && report.Checks["supported_fairplayd"] && report.Checks["capture_selector_match"]) &&
+			(captureManifest == nil || report.Checks["capture_integrity"] && report.Checks["portable_recovery_available"] && report.Checks["capture_selector_match"]) &&
 			(modelPath == "" || report.Checks["sinf_model_validation"])
 	} else if report.Host != nil {
-		report.Ready = report.Checks["supported_fairplayd"] && report.Checks["native_state_accessible"] && report.Checks["hardware_iomac"]
+		report.Ready = report.Checks["portable_recovery_available"] && report.Checks["native_state_accessible"] && report.Checks["hardware_iomac"]
 	}
 	report.DecryptReady = modelPath != "" && report.Ready && report.CompatibleModel != ""
 	return report

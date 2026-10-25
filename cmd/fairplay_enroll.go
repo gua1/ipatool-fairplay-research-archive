@@ -255,10 +255,12 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 	summary := map[string]any{
 		"schema": "ipatool-fairplay-enrollment-recovery-v2", "success": true,
 		"selector": manifest.App.SelectorID, "fairplayd_sha256": manifest.FairPlayd.SHA256,
+		"fairplayd_status": manifest.FairPlay.Status, "fairplayd_independently_verified": manifest.FairPlay.Decrypt,
 		"enrollment_model": enrollment, "decrypted_ipa": decrypted,
 		"decrypted_ipa_sha256": result.OutputSHA256, "encrypted_images": result.EncryptedImages,
 		"decrypted_pages": result.DecryptedPages, "all_cryptids_zero": true,
-		"all_code_directory_slots_match": true, "runtime": "pure-go-26a428",
+		"all_code_directory_slots_match": true, "runtime": "pure-go-portable-current-sinf",
+		"promotion_gate": "complete-sinf-and-ipa-validation",
 	}
 	document, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

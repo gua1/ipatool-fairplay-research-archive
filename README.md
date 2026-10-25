@@ -89,13 +89,15 @@ layouts remain unproven and fail closed.
 | --- | --- | --- |
 | macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the pure-Go `macos26a428` profile | Revalidated with per-page offsets across modern and older-account IPAs |
 | arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Supported through the embedded 26A428 compatibility path | Revalidated with an external account: 39 images and 10,080 pages |
-| Any other fairplayd arm64e hash | Unsupported | A new evaluator and differential validation are required |
+| Any other arm64e fairplayd hash using the current SINF/state contract | Automatic portable compatibility attempt | Unverified until recovery validates the complete SINF and matching IPA |
 
-The fairplayd arm64e slice hash is authoritative. The macOS host build and the
-internal FairPlay binary profile do not always have the same build label: the
-validated macOS `26A434` installation contains the checked `26A428` fairplayd
-slice. `fairplay-doctor` computes the exact slice hash and rejects a different
-binary instead of guessing from the marketing version.
+The fairplayd arm64e slice hash records provenance and identifies the builds
+that have independent controls; it is no longer an allowlist. The macOS host
+build and internal FairPlay binary profile do not always have the same label:
+the validated macOS `26A434` installation contains the checked `26A428`
+fairplayd slice. For an unknown hash, `fairplay-doctor` reports a portable
+recovery candidate. Recovery uses the captured state as runtime data and
+publishes no model unless the complete SINF and matching IPA pass validation.
 
 The experimental `fairplay-decrypt` command currently runs only on macOS and
 Linux because it enforces Unix private-file permissions. The standalone Go
@@ -182,7 +184,8 @@ Common failures are intentional fail-closed checks:
   `--model DIRECTORY`;
 - `no model that decodes SINF`: the selector matched, but the enrollment model
   did not validate the complete SINF;
-- a fairplayd build/hash mismatch: use the exact supported recovery profile;
+- `portable-validation-required`: the build is not independently verified;
+  run recovery with a matching IPA and accept only a fully validated result;
 - a permission error: remove group/other access with `chmod 600 MODEL` and
   `chmod 700 MODEL_DIRECTORY`;
 - an existing-output error: choose another path or explicitly pass `--force`.
