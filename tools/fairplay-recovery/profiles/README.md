@@ -32,6 +32,8 @@ enforce the exact nonzero-byte allowlist before the model can be used.
 14-slot evaluator (SHA-256 `d4b05fba...232288`). Its complete 224-byte input
 is zero in the published artifact. Dynamic pages retain only bytes read before
 the generated evaluator overwrites them; unused checkpoint memory is removed.
+The separate generated 16-byte periodic decoder converts the 192/224-byte
+object source field into that working-buffer representation.
 
 The profile is necessary because ordinary offline startup stops at the native
 IOKit boundary before the daemon finishes generating its protected global

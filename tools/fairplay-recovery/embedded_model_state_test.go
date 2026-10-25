@@ -46,3 +46,29 @@ func TestEmbeddedStateEvaluator(t *testing.T) {
 		t.Fatalf("zero-input output SHA-256 = %s", observed)
 	}
 }
+
+func TestStateInputPreparation(t *testing.T) {
+	for _, size := range []int{192, 224} {
+		input := make([]byte, size)
+		prepared, err := prepareEvaluatorInput(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(prepared) != 224 {
+			t.Fatalf("prepared %d-byte input has length %d", size, len(prepared))
+		}
+		for index := range size {
+			if prepared[index] != generatedStateInputMask[index%16] {
+				t.Fatalf("prepared input byte %d does not use the generated mask", index)
+			}
+		}
+		for index := size; index < len(prepared); index++ {
+			if prepared[index] != 0 {
+				t.Fatalf("prepared input padding byte %d is not zero", index)
+			}
+		}
+	}
+	if _, err := prepareEvaluatorInput(make([]byte, 208)); err == nil {
+		t.Fatal("unsupported state-slot length was accepted")
+	}
+}

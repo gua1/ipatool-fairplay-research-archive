@@ -254,13 +254,14 @@ The `fairplaystate` tag selects the repeated transform beginning at
 slots. The generated Go keeps one copy of that path and executes it fourteen
 times; it does not embed a trace interpreter or Apple binary.
 
-Its evaluator input is exactly 224 bytes. Shorter registries are zero-padded
-to fourteen slots by the caller, and only their real candidate slots are
-tested downstream. The transformed slots match every retained native slot for
-both enrollments. Their selected slots differ (1 for the local control, 8 for
-the external control), so portable recovery can try every real slot through
-the frame evaluator and accept only the candidate whose decrypted SINF atom
-tree validates.
+Its evaluator accepts the 192- or 224-byte source field at object `+0x304`.
+The generated build profile applies the proved repeating 16-byte input
+encoding and zero-pads the shorter form to fourteen slots. Only real candidate
+slots are tested downstream. The transformed slots match every retained
+native slot for both enrollments. Their selected slots differ (1 for the local
+control, 8 for the external control), so portable recovery can try every real
+slot through the frame evaluator and accept only the candidate whose decrypted
+SINF atom tree validates.
 
 ```sh
 go build -tags fairplaystate -o /private/tmp/fairplay-state \
@@ -272,8 +273,8 @@ go build -tags fairplaystate -o /private/tmp/fairplay-state \
 ```
 
 Both files must be mode `0600`; the output must not already exist. Only hashes
-are printed. The embedded model zeros the complete 224-byte input and retains
-only memory bytes read before the evaluator overwrites them.
+are printed. The embedded model zeros the complete 224-byte working buffer and
+retains only memory bytes read before the evaluator overwrites them.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

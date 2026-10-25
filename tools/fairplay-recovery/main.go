@@ -89,7 +89,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "evaluation requires both --evaluate-input and --evaluate-output, without --recover-output")
 			os.Exit(2)
 		}
-		input, err := readPrivateInput(*evaluateInput, generatedInputBytes())
+		rawInput, err := readPrivateInput(*evaluateInput)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		input, err := prepareEvaluatorInput(rawInput)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -113,7 +118,7 @@ func main() {
 			os.Exit(1)
 		}
 		digest := sha256.Sum256(output)
-		fmt.Printf("fairplay_go_evaluation=1 bytes=%d output_sha256=%s output=%s\n", len(output), hex.EncodeToString(digest[:]), *evaluateOutput)
+		fmt.Printf("fairplay_go_evaluation=1 input_bytes=%d output_bytes=%d output_sha256=%s output=%s\n", len(rawInput), len(output), hex.EncodeToString(digest[:]), *evaluateOutput)
 		return
 	}
 	if *recoveryOutput != "" {
@@ -142,7 +147,7 @@ func main() {
 	}
 }
 
-func readPrivateInput(path string, size int) ([]byte, error) {
+func readPrivateInput(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -153,9 +158,6 @@ func readPrivateInput(path string, size int) ([]byte, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
-	}
-	if len(value) != size {
-		return nil, fmt.Errorf("evaluator input is %d bytes, want %d", len(value), size)
 	}
 	return value, nil
 }
