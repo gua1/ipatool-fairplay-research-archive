@@ -51,12 +51,14 @@ STOP = 0x100223A30
 BLOCK = 0x710000014EE0
 RESULT_BLOCK = BLOCK
 COPY_RESULT_TO_BLOCK = False
-INSTRUCTION_PATH: tuple[int, ...] | None = None
+INSTRUCTION_PATH: tuple[int | str, ...] | None = None
 INSTRUCTION_PATH_FIRST_REPEAT = False
 INSTRUCTION_PATH_END_BEFORE = None
+BLOCK_PATH_MACROS: dict[int, tuple[int, str]] = {}
 REPEAT_COUNT = 1
 MODEL_PAGE_SANITIZER = None
 MODEL_INITIAL_READ_BYTES: set[int] = set()
+EXTRA_MODEL_PAGES: set[int] = set()
 FUNCTION_NAME = "runGenerated"
 EMIT_PROFILE_PREAMBLE = True
 DEFAULT_BUILD_TAG = None
@@ -249,6 +251,20 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
     pc = instruction.address
     output: list[str] = []
 
+    def append_writeback(memory_index: int) -> None:
+        if not instruction.writeback:
+            return
+        memory = operands[memory_index]
+        base = disassembler.reg_name(memory.mem.base).lower()
+        if instruction.post_index:
+            adjustment = operand_expression(
+                disassembler, operands[memory_index + 1], 64
+            )
+            expression = f"({read_register(base)} + {adjustment})"
+        else:
+            expression = memory_address(disassembler, memory)
+        output.append(write_register(base, expression))
+
     if pc in {site[0] for sites in FAULT_SITES.values() for site in sites}:
         output.extend(
             [
@@ -305,6 +321,7 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 write_register(destination, f"value{ordinal}"),
             ]
         )
+        append_writeback(1)
     elif mnemonic == "ldp":
         first = reg_name(disassembler, operands[0])
         second = reg_name(disassembler, operands[1])
@@ -320,6 +337,7 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 write_register(second, f"value{ordinal}b"),
             ]
         )
+        append_writeback(2)
     elif mnemonic == "stp":
         first = reg_name(disassembler, operands[0])
         second = reg_name(disassembler, operands[1])
@@ -331,6 +349,7 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 f"if err := s.storeValue(({address}) + {size}, {read_register(second)}, {size}); err != nil {{ return err }}",
             ]
         )
+        append_writeback(2)
     elif mnemonic in {"str", "stur", "strb"}:
         source = reg_name(disassembler, operands[0])
         size = 1 if mnemonic == "strb" else 8 if reg_width(source) == 64 else 4
@@ -339,6 +358,7 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 f"if err := s.storeValue({memory_address(disassembler, operands[1])}, {read_register(source)}, {size}); err != nil {{ return err }}",
             ]
         )
+        append_writeback(1)
     elif mnemonic in {"lsl", "lsr", "ror"}:
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
@@ -569,6 +589,9 @@ def generate_go(
     else:
         instructions = []
         for address in INSTRUCTION_PATH:
+            if isinstance(address, str):
+                instructions.append(address)
+                continue
             raw = bytes(
                 database.bytes.get_byte_at(address + offset, allow_uninitialized=True)
                 for offset in range(4)
@@ -578,7 +601,11 @@ def generate_go(
                 raise ValueError(f"cannot decode oracle instruction at {address:#x}")
             instructions.append(decoded[0])
 
-    by_pc = {instruction.address: instruction for instruction in instructions}
+    by_pc = {
+        instruction.address: instruction
+        for instruction in instructions
+        if not isinstance(instruction, str)
+    }
     site_rows = []
     for round_index in sorted(FAULT_SITES):
         values = []
@@ -656,6 +683,9 @@ def generate_go(
         lines.append(f"\tfor repeat := 0; repeat < {REPEAT_COUNT}; repeat++ {{")
     instruction_indent = "\t\t" if REPEAT_COUNT != 1 else "\t"
     for ordinal, instruction in enumerate(instructions):
+        if isinstance(instruction, str):
+            lines.append(f"{instruction_indent}{instruction}")
+            continue
         lines.append(f"{instruction_indent}// {instruction.address:#x}: {instruction.mnemonic} {instruction.op_str}")
         for statement in emit_instruction(disassembler, instruction, ordinal):
             lines.append(instruction_indent + statement)
@@ -705,6 +735,8 @@ def recover_index_domains(
                 index_register=register,
                 restore_register=reg_index(destination) != reg_index(register),
             )
+    if not sites:
+        return {}
     oracle = CheckpointBlockOracle(
         checkpoint_path,
         entry=START,
@@ -789,6 +821,14 @@ def main() -> None:
         type=Path,
         help="private validation trace whose recent_pcs define a non-linear path",
     )
+    parser.add_argument(
+        "--block-trace",
+        type=Path,
+        help=(
+            "private validation trace whose recent_pcs and block_counts define "
+            "a block path; configured repeated kernels are replaced by Go calls"
+        ),
+    )
     args = parser.parse_args()
 
     with gzip.open(args.checkpoint, "rb") as stream:
@@ -816,6 +856,7 @@ def main() -> None:
             for key in ("memory_read_events", "memory_write_events")
             for event in trace[key]
         }
+        | EXTRA_MODEL_PAGES
     )
     if BLOCK & ~0xFFF not in pages:
         raise ValueError("memory trace does not include the oracle block")
@@ -845,6 +886,9 @@ def main() -> None:
                     if value not in written_bytes
                 )
 
+    if args.instruction_trace is not None and args.block_trace is not None:
+        raise ValueError("choose only one instruction or block trace")
+
     global INSTRUCTION_PATH
     if args.instruction_trace is not None:
         instruction_trace = json.loads(args.instruction_trace.read_text())
@@ -865,6 +909,46 @@ def main() -> None:
                 path = path[: path.index(INSTRUCTION_PATH_END_BEFORE)]
             except ValueError as error:
                 raise ValueError("instruction trace lacks configured end boundary") from error
+        INSTRUCTION_PATH = tuple(path)
+    elif args.block_trace is not None:
+        block_trace = json.loads(args.block_trace.read_text())
+        if block_trace.get("binary_sha256") != checkpoint["binary_sha256"]:
+            raise ValueError("block trace build mismatch")
+        blocks = [int(value, 16) for value in block_trace.get("recent_pcs", [])]
+        if not blocks or blocks[0] != START:
+            raise ValueError("block trace does not begin at the oracle entry")
+        if INSTRUCTION_PATH_FIRST_REPEAT:
+            try:
+                blocks = blocks[: blocks[1:].index(START) + 1]
+            except ValueError as error:
+                raise ValueError("block trace has no repeated oracle entry") from error
+        elif blocks and blocks[-1] == STOP:
+            blocks.pop()
+        sizes = {
+            int(row["pc"], 16): int(row["size"])
+            for row in block_trace.get("block_counts", [])
+        }
+        path: list[int | str] = []
+        index = 0
+        while index < len(blocks):
+            address = blocks[index]
+            macro = BLOCK_PATH_MACROS.get(address)
+            if macro is not None:
+                exit_address, statement = macro
+                path.append(statement)
+                index += 1
+                while index < len(blocks) and blocks[index] != exit_address:
+                    index += 1
+                if index == len(blocks):
+                    raise ValueError(
+                        f"block macro at {address:#x} never reaches {exit_address:#x}"
+                    )
+                continue
+            size = sizes.get(address)
+            if size is None or size <= 0 or size % 4 != 0:
+                raise ValueError(f"block trace lacks a valid size for {address:#x}")
+            path.extend(range(address, address + size, 4))
+            index += 1
         INSTRUCTION_PATH = tuple(path)
 
     domains = recover_index_domains(args.checkpoint, database)

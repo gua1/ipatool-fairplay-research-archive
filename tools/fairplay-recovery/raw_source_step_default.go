@@ -4,6 +4,14 @@ package main
 
 import "fmt"
 
-func runRawSource(_ *model, _ string, _ bool) (string, int, error) {
+func runRawSource(_ *model, _ string, _ bool, _ int) (string, int, error) {
 	return "", 0, fmt.Errorf("raw source step is not included in this build")
+}
+
+func currentRawSourceReport() (any, error) {
+	return nil, fmt.Errorf("raw source state is not included in this build")
+}
+
+func currentRawSourceBytes(_ int) ([]byte, error) {
+	return nil, fmt.Errorf("raw source state is not included in this build")
 }

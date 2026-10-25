@@ -310,11 +310,20 @@ native checkpoints exactly for both controls. The checked loop counts are
 cover about 82% and 81% of the dynamic instructions represented by the top-250
 block profiles.
 
+The surrounding outer source loop is generated too. It replaces the five hot
+spans with direct Go calls, models the optional block and six-iteration cycle
+boundary, and matches the complete native state after 226 iterations for A and
+116 for B. It emits the exact native 224/192-byte `+0x304` fields in roughly
+0.05/0.02 seconds. Feeding those outputs through the existing Go state, frame,
+and SIDB evaluators reproduces both retained enrollment frames and decoder-key
+hashes end to end.
+
 This build intentionally has no embedded account model and is not part of the
-normal user workflow. It consumes a mode-`0600` private checkpoint model for
-differential validation. The remaining work is to compose the kernels with
-the lower-frequency dispatcher/orchestration blocks and inject raw SIDB/MAC
-inputs, not to reverse the already-ported kernel bodies again.
+normal user workflow. It consumes a mode-`0600` private outer-entry model and
+can write the exact `+0x304` source with `--raw-source-output` and
+`--raw-source-bytes`. The remaining work is upstream: construct that outer-entry
+model directly from the captured raw SIDB and hardware identity. No private
+outer model is embedded or committed.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

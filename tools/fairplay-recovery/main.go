@@ -70,8 +70,12 @@ func main() {
 	evaluateInput := flag.String("evaluate-input", "", "private fixed-size evaluator input")
 	evaluateOutput := flag.String("evaluate-output", "", "new private evaluator output")
 	enrollmentFrame := flag.String("enrollment-frame", "", "private 16-byte enrollment frame for SIDB recovery")
-	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: writer, tail, even, odd, or digest")
+	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: writer, tail, even, odd, digest, cycle, outer-primary, or outer")
 	rawSourceLoop := flag.Bool("raw-source-loop", false, "run one private 26A428 source-writer loop to its natural exit")
+	rawSourceIterations := flag.Int("raw-source-iterations", 0, "run exactly this many raw-source kernel iterations")
+	rawSourceReport := flag.String("raw-source-report", "", "new private JSON report for raw-source register/page state")
+	rawSourceOutput := flag.String("raw-source-output", "", "new private 192/224-byte +0x304 source output")
+	rawSourceBytes := flag.Int("raw-source-bytes", 0, "raw-source output size: 192 or 224")
 	flag.Parse()
 	var value *model
 	var err error
@@ -117,16 +121,50 @@ func main() {
 			fmt.Fprintln(os.Stderr, "raw source execution cannot be combined with recovery, evaluation, or frame inputs")
 			os.Exit(2)
 		}
-		digest, iterations, err := runRawSource(value, *rawSourceKernel, *rawSourceLoop)
+		if (*rawSourceOutput == "") != (*rawSourceBytes == 0) {
+			fmt.Fprintln(os.Stderr, "--raw-source-output and --raw-source-bytes must be supplied together")
+			os.Exit(2)
+		}
+		if *rawSourceOutput != "" && (*rawSourceKernel != "outer" || !*rawSourceLoop) {
+			fmt.Fprintln(os.Stderr, "raw source output requires the complete outer loop")
+			os.Exit(2)
+		}
+		if *rawSourceLoop && *rawSourceIterations != 0 {
+			fmt.Fprintln(os.Stderr, "choose either --raw-source-loop or --raw-source-iterations")
+			os.Exit(2)
+		}
+		digest, iterations, err := runRawSource(value, *rawSourceKernel, *rawSourceLoop, *rawSourceIterations)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		if *rawSourceReport != "" {
+			report, err := currentRawSourceReport()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if err := writePrivateJSON(*rawSourceReport, report); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+		if *rawSourceOutput != "" {
+			output, err := currentRawSourceBytes(*rawSourceBytes)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if err := writePrivateBytes(*rawSourceOutput, output); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
 		fmt.Printf("fairplay_raw_source=1 kernel=%s loop=%t iterations=%d state_sha256=%s\n", *rawSourceKernel, *rawSourceLoop, iterations, digest)
 		return
 	}
-	if *rawSourceLoop {
-		fmt.Fprintln(os.Stderr, "--raw-source-loop requires --raw-source-kernel")
+	if *rawSourceLoop || *rawSourceIterations != 0 || *rawSourceReport != "" || *rawSourceOutput != "" || *rawSourceBytes != 0 {
+		fmt.Fprintln(os.Stderr, "raw source iteration options require --raw-source-kernel")
 		os.Exit(2)
 	}
 	server, err := newOracleServer(value, *workers)
