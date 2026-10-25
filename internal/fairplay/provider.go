@@ -3,6 +3,7 @@ package fairplay
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -49,18 +50,21 @@ func ResolveLogicalKeyWithModel(sinf, pack []byte) (KeyMaterial, error) {
 	if model.hasSelector {
 		supportedSelector = model.selector.Identifier()
 	}
-	return resolveLogicalKey(sinf, model, modelName, modelSHA256, "external-enrollment-model", "recovered enrollment model", supportedSelector)
+	return resolveLogicalKey(sinf, model, modelName, modelSHA256, "external-enrollment-model", supportedSelector)
 }
 
-// ResolveLogicalKeyWithModels selects one selector-bound model from a
-// registry. Version-1 packs remain supported as an explicit --model file, but
-// are intentionally rejected in registries because they carry no selector.
+// ResolveLogicalKeyWithModels selects one model by both selector and complete
+// SINF validation. Several model types may share a selector, but exactly one
+// must decode the requested SINF. Version-1 packs remain supported as an
+// explicit --model file, but are rejected in registries without a selector.
 func ResolveLogicalKeyWithModels(sinf []byte, packs [][]byte) (KeyMaterial, error) {
 	selector, err := ParseSINFSelector(sinf)
 	if err != nil {
 		return KeyMaterial{}, err
 	}
-	var selected []byte
+	var selected KeyMaterial
+	selectedCount := 0
+	matchedSelector := false
 	for index, pack := range packs {
 		model, parseErr := parseCurrentSINFModel(pack)
 		if parseErr != nil {
@@ -72,18 +76,33 @@ func ResolveLogicalKeyWithModels(sinf []byte, packs [][]byte) (KeyMaterial, erro
 		if model.selector != selector {
 			continue
 		}
-		if selected != nil {
-			return KeyMaterial{}, fmt.Errorf("FairPlay model registry has multiple models for selector %s", selector.Identifier())
+		matchedSelector = true
+		candidate, resolveErr := ResolveLogicalKeyWithModel(sinf, pack)
+		if errors.Is(resolveErr, errCurrentSINFProfileMismatch) {
+			continue
 		}
-		selected = pack
+		if resolveErr != nil {
+			clear(selected.LogicalKey[:])
+			return KeyMaterial{}, fmt.Errorf("FairPlay model %d: %w", index, resolveErr)
+		}
+		selectedCount++
+		if selectedCount > 1 {
+			clear(selected.LogicalKey[:])
+			clear(candidate.LogicalKey[:])
+			return KeyMaterial{}, fmt.Errorf("FairPlay model registry has multiple models that decode SINF for selector %s", selector.Identifier())
+		}
+		selected = candidate
 	}
-	if selected == nil {
-		return KeyMaterial{}, fmt.Errorf("FairPlay model registry has no model for selector %s", selector.Identifier())
+	if selectedCount == 1 {
+		return selected, nil
 	}
-	return ResolveLogicalKeyWithModel(sinf, selected)
+	if matchedSelector {
+		return KeyMaterial{}, fmt.Errorf("FairPlay model registry has no model that decodes SINF for selector %s", selector.Identifier())
+	}
+	return KeyMaterial{}, fmt.Errorf("FairPlay model registry has no model for selector %s", selector.Identifier())
 }
 
-func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA256, stateOrigin, supportedProfile, supportedSelector string) (KeyMaterial, error) {
+func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA256, stateOrigin, supportedSelector string) (KeyMaterial, error) {
 	var result KeyMaterial
 	fields, err := parseSINFFields(sinf)
 	if err != nil {
@@ -103,16 +122,16 @@ func resolveLogicalKey(sinf []byte, model currentSINFModel, modelName, modelSHA2
 	)
 	if supportedSelector != "" && selector.Identifier() != supportedSelector {
 		return result, fmt.Errorf(
-			"unsupported FairPlay profile %s; the selected model supports selector %s from %s",
-			profile, supportedSelector, supportedProfile,
+			"enrollment model is bound to selector %s, but IPA has %s",
+			supportedSelector, profile,
 		)
 	}
 	innerKey, err := currentSINFPrivateKey(model, sinf, fields)
 	if err != nil {
-		if supportedProfile != "" {
-			return result, fmt.Errorf("unsupported FairPlay profile %s; the selected model is validated only for %s: %w", profile, supportedProfile, err)
+		if errors.Is(err, errCurrentSINFProfileMismatch) {
+			return result, fmt.Errorf("enrollment model cannot decode SINF %s; recover a model from the account that acquired this IPA: %w", profile, err)
 		}
-		return result, fmt.Errorf("FairPlay profile %s does not match the selected experimental model: %w", profile, err)
+		return result, fmt.Errorf("decode SINF %s with enrollment model: %w", profile, err)
 	}
 	defer clear(innerKey[:])
 	logical := logicalFromInnerKey(innerKey)

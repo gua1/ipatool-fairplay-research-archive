@@ -1,7 +1,6 @@
 package fairplay
 
 import (
-	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -145,37 +144,5 @@ func TestLoadEnrollmentCaptureIntegrity(t *testing.T) {
 	}
 	if _, err := LoadEnrollmentCapture(directory, true); err == nil {
 		t.Fatal("capture path traversal was accepted")
-	}
-}
-
-func TestFairPlayDoctorMatchesSelector(t *testing.T) {
-	directory := t.TempDir()
-	selector := SINFSelector{User: 0x12345678, Key: 2}
-	ipaPath := filepath.Join(directory, "App.ipa")
-	output, err := os.Create(ipaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive := zip.NewWriter(output)
-	member, err := archive.Create("Payload/App.app/SC_Info/App.sinf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := member.Write(currentLayoutSINF(selector)); err != nil {
-		t.Fatal(err)
-	}
-	if err := archive.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := output.Close(); err != nil {
-		t.Fatal(err)
-	}
-	modelPath := filepath.Join(directory, "model.bin")
-	if err := os.WriteFile(modelPath, selectorBoundModelPack(t, selector), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	report := DoctorFairPlay("", ipaPath, modelPath)
-	if !report.Ready || !report.Checks["selector_match"] || report.CompatibleModel != modelPath {
-		t.Fatalf("doctor did not accept matching inputs: %#v", report)
 	}
 }

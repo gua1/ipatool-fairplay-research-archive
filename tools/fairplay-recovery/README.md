@@ -385,4 +385,6 @@ python3 analysis/run_portable_fairplay_pipeline.py \
 
 The output directory must not exist. It is created mode `0700`, and all
 secret-bearing files are mode `0600`. The pipeline fails unless every encrypted
-Mach-O has `cryptid=0` and every available CodeDirectory page hash matches.
+Mach-O has `cryptid=0`, every available CodeDirectory page hash matches the
+encrypted source, and the sampled executable plaintext pages pass the ARM64
+structural audit.

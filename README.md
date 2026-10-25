@@ -87,8 +87,8 @@ layouts remain unproven and fail closed.
 
 | Host/FairPlay profile | Recovery status | End-to-end IPA status |
 | --- | --- | --- |
-| macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the pure-Go `macos26a428` profile | Proven with modern accounts and the older key-5 account; older WhatsApp: 9 images and 27,604 pages |
-| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Supported through the embedded 26A428 compatibility path | Proven with an external fresh-account control: 39 images and 10,080 pages |
+| macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the pure-Go `macos26a428` profile | Revalidated with per-page offsets across modern and older-account IPAs |
+| arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Supported through the embedded 26A428 compatibility path | Revalidated with an external account: 39 images and 10,080 pages |
 | Any other fairplayd arm64e hash | Unsupported | A new evaluator and differential validation are required |
 
 The fairplayd arm64e slice hash is authoritative. The macOS host build and the
@@ -149,7 +149,9 @@ ipatool --format json fairplay-decrypt \
 
 The model may be either one `.bin` file or a private directory containing up
 to 256 selector-bound `.bin` models. Directory mode is useful for several
-accounts because ipatool reads the IPA selector and chooses the matching model:
+accounts or multiple model layouts for one selector. ipatool first filters by
+the IPA selector, then requires exactly one model to decode and validate the
+complete SINF. Zero valid models and multiple valid models both fail closed:
 
 ```shell
 mkdir -m 700 fairplay-models
@@ -164,6 +166,9 @@ ipatool fairplay-decrypt \
 Model directories must be mode `0700` or stricter, and every model must be
 mode `0600` or stricter. Symlinks are rejected. Files without a `.bin`
 extension are ignored.
+`fairplay-doctor` reports general preflight readiness as `ready`; its separate
+`decrypt_ready` field becomes true only when a supplied model validates the
+complete IPA SINF.
 
 Unless explicit paths are supplied, `App.ipa` produces
 `App.decrypted.ipa` and `App.decrypted.json` beside the input. Existing output
@@ -175,8 +180,8 @@ Common failures are intentional fail-closed checks:
 
 - `requires a private enrollment model`: pass `--model FILE` or
   `--model DIRECTORY`;
-- `unsupported FairPlay profile`: the account/SINF selector does not match the
-  selected model;
+- `no model that decodes SINF`: the selector matched, but the enrollment model
+  did not validate the complete SINF;
 - a fairplayd build/hash mismatch: use the exact supported recovery profile;
 - a permission error: remove group/other access with `chmod 600 MODEL` and
   `chmod 700 MODEL_DIRECTORY`;
@@ -262,9 +267,9 @@ it contains private account-derived key material.
    ```
 
    This runs the build-specific Go path, writes `fairplay-enrollment.bin`,
-   decrypts the captured IPA, and verifies every encrypted Mach-O and available
-   CodeDirectory page hash. A candidate model is not promoted unless complete
-   IPA validation succeeds.
+   decrypts the captured IPA, verifies every encrypted Mach-O and available
+   CodeDirectory page hash, and structurally audits executable plaintext pages.
+   A candidate model is not promoted unless complete IPA validation succeeds.
 
 7. Store the recovered model privately and reuse it for another IPA from the
    same enrollment and selector:
@@ -291,7 +296,10 @@ it contains private account-derived key material.
    image to have `cryptid_after: 0`, all expected pages to be processed, and
    every listed CodeDirectory to have `matched_slots == slot_count`. The output
    is an analysis IPA and still needs recursive code signing before it can be
-   installed.
+   installed. CodeDirectory hashes authenticate the encrypted source; the
+   ARM64 audits are the independent structural check on decrypted plaintext.
+   `audited_page_index` identifies the executable page represented by the
+   legacy `first_page_*` report fields when code starts after page zero.
 
 `fairplay-decrypt` decrypts a personalized IPA using an explicit private model.
 After local model recovery, no device state, Wine, Unicorn, or runtime hardware

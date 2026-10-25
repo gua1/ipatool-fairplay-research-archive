@@ -161,7 +161,13 @@ func openIPAInventory(path string) (ipaInventory, *zip.ReadCloser, error) {
 	names := map[string]bool{}
 	files := map[string]*zip.File{}
 	for _, file := range archive.File {
-		if names[file.Name] {
+		if previous, exists := files[file.Name]; exists {
+			// Some App Store repacks repeat an empty directory marker. It has no
+			// payload to choose between; duplicate files remain ambiguous.
+			if strings.HasSuffix(file.Name, "/") && previous.FileInfo().IsDir() &&
+				file.FileInfo().IsDir() && previous.UncompressedSize64 == 0 && file.UncompressedSize64 == 0 {
+				continue
+			}
 			archive.Close()
 			return result, nil, fmt.Errorf("duplicate IPA member %q", file.Name)
 		}
@@ -309,7 +315,7 @@ func decryptPagesInPlace(output []byte, image encryptedImage, records [][32]byte
 			for index := first; index < len(records); index += workers {
 				record := records[index]
 				key := deriver.pageKey(
-					record[:16], image.sliceOffset+uint64(image.layout.cryptOffset),
+					record[:16], image.sliceOffset+uint64(image.layout.cryptOffset)+uint64(index*pageBytes),
 				)
 				keys[index] = key
 				block, _ := aes.NewCipher(key[:])
@@ -372,6 +378,43 @@ func firstARM64AuditPage(start, end int, ranges []machoFileRange) (int, bool) {
 	return result, result != end
 }
 
+func auditAdditionalARM64Pages(output []byte, start, count, auditedIndex int, ranges []machoFileRange) error {
+	var candidates []int
+	for index := 0; index < count; index++ {
+		if index == auditedIndex {
+			continue
+		}
+		pageStart := uint64(start + index*pageBytes)
+		for _, section := range ranges {
+			if pageStart >= section.offset && pageStart+pageBytes <= section.offset+section.size {
+				candidates = append(candidates, index)
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	checked := map[int]bool{}
+	plausible := 0
+	for _, position := range []int{0, len(candidates) / 2, len(candidates) - 1} {
+		index := candidates[position]
+		if checked[index] {
+			continue
+		}
+		checked[index] = true
+		pageStart := start + index*pageBytes
+		valid, _ := auditARM64(output[pageStart : pageStart+pageBytes])
+		if valid*100 >= (pageBytes/4)*minimumARM64InstructionValidPercent {
+			plausible++
+		}
+	}
+	if plausible*2 < len(checked)+1 {
+		return fmt.Errorf("additional executable pages failed ARM64 structural audit (%d/%d sampled pages plausible)", plausible, len(checked))
+	}
+	return nil
+}
+
 func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask [16]byte, deriver *pageKeyDeriver) (*imageReport, error) {
 	if image.layout.cryptID != 1 {
 		return nil, fmt.Errorf("%s: expected cryptid 1", image.member)
@@ -409,36 +452,44 @@ func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask 
 	structurallyPlausible := false
 	if isARM64InstructionSet(image.layout.cpuType) {
 		bestValid, bestWords, bestStart := 0, 0, start
-		legacyValid, legacyMnemonics := auditARM64(output[start : start+pageBytes])
-		if legacyValid*100 >= (pageBytes/4)*minimumARM64InstructionValidPercent {
-			valid, instructionWords, mnemonics = legacyValid, pageBytes/4, legacyMnemonics
-			structurallyPlausible = true
+		if len(image.layout.instructionRanges) == 0 {
+			valid, mnemonics = auditARM64(output[start : start+pageBytes])
+			instructionWords = pageBytes / 4
+			bestValid, bestWords = valid, instructionWords
+			structurallyPlausible = valid*100 >= instructionWords*minimumARM64InstructionValidPercent
 		} else {
-			bestValid, bestWords = legacyValid, pageBytes/4
-		}
-		firstCandidate, hasSections := firstARM64AuditPage(start, end, image.layout.instructionRanges)
-		for candidate := firstCandidate; !structurallyPlausible && hasSections && candidate+pageBytes <= end; candidate += pageBytes {
-			observed, words, counts := auditARM64FirstPage(
-				output[candidate:candidate+pageBytes], uint64(candidate), image.layout.instructionRanges,
-			)
-			if words == 0 {
-				continue
+			firstCandidate, hasSections := firstARM64AuditPage(start, end, image.layout.instructionRanges)
+			if !hasSections {
+				return nil, fmt.Errorf("%s: encrypted region has no executable ARM64 instructions to audit", image.member)
 			}
-			if observed*bestWords > bestValid*words {
-				bestValid, bestWords, bestStart = observed, words, candidate
-			}
-			if observed*100 >= words*minimumARM64InstructionValidPercent {
-				auditPageStart = candidate
-				valid, instructionWords, mnemonics = observed, words, counts
-				structurallyPlausible = true
-				break
+			for candidate := firstCandidate; !structurallyPlausible && candidate+pageBytes <= end; candidate += pageBytes {
+				observed, words, counts := auditARM64FirstPage(
+					output[candidate:candidate+pageBytes], uint64(candidate), image.layout.instructionRanges,
+				)
+				if words == 0 {
+					continue
+				}
+				if bestWords == 0 || observed*bestWords > bestValid*words {
+					bestValid, bestWords, bestStart = observed, words, candidate
+				}
+				if observed*100 >= words*minimumARM64InstructionValidPercent {
+					auditPageStart = candidate
+					valid, instructionWords, mnemonics = observed, words, counts
+					structurallyPlausible = true
+					break
+				}
 			}
 		}
 		if !structurallyPlausible {
 			best := output[bestStart : bestStart+pageBytes]
 			return nil, fmt.Errorf("%s: best executable page has only %d/%d valid ARM64 words (SHA-256 %s)", image.member, bestValid, bestWords, digest(best))
 		}
+		auditedPageIndex := (auditPageStart - start) / pageBytes
+		if err := auditAdditionalARM64Pages(output, start, len(records), auditedPageIndex, image.layout.instructionRanges); err != nil {
+			return nil, fmt.Errorf("%s: %w", image.member, err)
+		}
 	}
+	auditedPageIndex := (auditPageStart - start) / pageBytes
 	first := output[auditPageStart : auditPageStart+pageBytes]
 	binary.LittleEndian.PutUint32(output[id:id+4], 0)
 	if sha256.Sum256(output[:id]) != prefixDigest ||
@@ -453,13 +504,16 @@ func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask 
 		SliceOffset: image.sliceOffset, SliceSize: image.sliceSize,
 		EncryptedSHA256: hex.EncodeToString(encryptedDigest[:]), DecryptedSHA256: hex.EncodeToString(decryptedDigest[:]),
 		CryptOffset: image.layout.cryptOffset, CryptSize: image.layout.cryptSize, Pages: len(records),
-		FirstPlaintextPageSHA256: digest(first), FirstPageValidARM64Words: valid,
+		FirstPlaintextPageSHA256: digest(first), AuditedPageIndex: auditedPageIndex, FirstPageValidARM64Words: valid,
 		FirstPageStructurallyPlausible: structurallyPlausible, FirstPageMnemonics: mnemonics,
 		OrderedPageKeysSHA256: hex.EncodeToString(keysHash.Sum(nil)), AppMaskSHA256: digest(mask[:]),
 		CodeDirectories: audits, CryptIDBefore: 1, CryptIDAfter: 0, ExactMutationScope: true,
 	}
 	if isARM64InstructionSet(image.layout.cpuType) {
 		report.FirstPageAudit = "arm64-instruction-decode"
+		if auditedPageIndex != 0 {
+			report.FirstPageAudit = "arm64-first-executable-page-instruction-decode"
+		}
 		report.FirstPageInstructionWords = instructionWords
 	} else {
 		report.FirstPageAudit = "not-performed"
@@ -597,7 +651,14 @@ func DecryptIPA(options DecryptOptions) (DecryptResult, error) {
 	writer := zip.NewWriter(io.MultiWriter(temporary, outputHasher))
 	var imageReports []*imageReport
 	pages := 0
+	seenDirectories := map[string]bool{}
 	for _, file := range source.File {
+		if file.FileInfo().IsDir() {
+			if seenDirectories[file.Name] {
+				continue // Duplicate empty directory markers were checked during inventory.
+			}
+			seenDirectories[file.Name] = true
+		}
 		images, encrypted := imageMap[file.Name]
 		if !encrypted {
 			if err := writer.Copy(file); err != nil {

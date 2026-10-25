@@ -41,6 +41,7 @@ type FairPlayDoctorReport struct {
 	Schema          string                       `json:"schema"`
 	CreatedAt       string                       `json:"created_at"`
 	Ready           bool                         `json:"ready"`
+	DecryptReady    bool                         `json:"decrypt_ready"`
 	Host            *FairPlayHostDiagnostic      `json:"host,omitempty"`
 	Capture         *EnrollmentCaptureDiagnostic `json:"capture,omitempty"`
 	CaptureVerified bool                         `json:"capture_verified"`
@@ -238,6 +239,88 @@ func inspectIPASINFs(path string) ([]SINFDiagnostic, error) {
 	return result, nil
 }
 
+func readIPASINF(path, member string) ([]byte, error) {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	defer archive.Close()
+	var selected *zip.File
+	for _, file := range archive.File {
+		if file.Name != member {
+			continue
+		}
+		if selected != nil {
+			return nil, fmt.Errorf("IPA has duplicate SINF member %q", member)
+		}
+		selected = file
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("IPA SINF member %q is missing", member)
+	}
+	return zipBytes(selected)
+}
+
+func validatedModelForSINF(ipaPath, member, modelPath string,
+	models []EnrollmentModelDiagnostic, capture *EnrollmentCaptureManifest) (string, error) {
+	sinf, err := readIPASINF(ipaPath, member)
+	if err != nil {
+		return "", err
+	}
+	defer clear(sinf)
+	info, err := os.Stat(modelPath)
+	if err != nil {
+		return "", err
+	}
+	var material KeyMaterial
+	if info.IsDir() {
+		packs, readErr := readEnrollmentModelRegistry(modelPath)
+		if readErr != nil {
+			return "", readErr
+		}
+		defer clearModelPacks(packs)
+		eligible := make([][]byte, 0, len(packs))
+		for _, pack := range packs {
+			model, parseErr := parseCurrentSINFModel(pack)
+			if parseErr != nil {
+				return "", parseErr
+			}
+			if modelMatchesCaptureBuild(hex.EncodeToString(model.fairplaydHash[:]), capture) {
+				eligible = append(eligible, pack)
+			}
+		}
+		if len(eligible) == 0 {
+			return "", fmt.Errorf("no enrollment model matches the capture's FairPlay build")
+		}
+		material, err = ResolveLogicalKeyWithModels(sinf, eligible)
+	} else {
+		pack, readErr := readEnrollmentModel(modelPath)
+		if readErr != nil {
+			return "", readErr
+		}
+		defer clear(pack)
+		model, parseErr := parseCurrentSINFModel(pack)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		if !modelMatchesCaptureBuild(hex.EncodeToString(model.fairplaydHash[:]), capture) {
+			return "", fmt.Errorf("enrollment model does not match the capture's FairPlay build")
+		}
+		material, err = ResolveLogicalKeyWithModel(sinf, pack)
+	}
+	if err != nil {
+		return "", err
+	}
+	defer clear(material.LogicalKey[:])
+	selectedHash, _ := material.Evidence["model_sha256"].(string)
+	for _, model := range models {
+		if model.SHA256 == selectedHash {
+			return model.Path, nil
+		}
+	}
+	return "", fmt.Errorf("validated enrollment model is missing from diagnostics")
+}
+
 func modelMatchesCaptureBuild(modelHash string, capture *EnrollmentCaptureManifest) bool {
 	return capture == nil || modelHash == capture.FairPlayd.SHA256 ||
 		capture.FairPlay.CompatibilitySHA256 != "" && modelHash == capture.FairPlay.CompatibilitySHA256
@@ -320,20 +403,27 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 		}
 	}
 	if len(report.SINF) != 0 && len(report.Models) != 0 {
-		selectors := make(map[string]bool)
-		for _, value := range report.SINF {
-			selectors[value.SelectorID] = true
-		}
-		for _, model := range report.Models {
-			buildMatches := modelMatchesCaptureBuild(model.FairPlaydHash, captureManifest)
-			if model.SelectorID != "" && selectors[model.SelectorID] && buildMatches {
-				report.CompatibleModel = model.Path
-				break
+		if len(report.SINF) != 1 {
+			report.Errors = append(report.Errors, "decryption requires exactly one SINF")
+		} else {
+			for _, model := range report.Models {
+				if modelMatchesCaptureBuild(model.FairPlaydHash, captureManifest) &&
+					(model.SelectorID == report.SINF[0].SelectorID || model.SelectorID == "" && len(report.Models) == 1) {
+					report.Checks["selector_match"] = true
+				}
 			}
 		}
-		report.Checks["selector_match"] = report.CompatibleModel != ""
-		if report.CompatibleModel == "" {
+		if !report.Checks["selector_match"] {
 			report.Errors = append(report.Errors, "no enrollment model matches the IPA SINF selector")
+		} else {
+			selected, err := validatedModelForSINF(ipaPath, report.SINF[0].Path,
+				modelPath, report.Models, captureManifest)
+			if err != nil {
+				report.Errors = append(report.Errors, "model validation: "+err.Error())
+			} else {
+				report.CompatibleModel = selected
+				report.Checks["sinf_model_validation"] = true
+			}
 		}
 	}
 	if captureManifest != nil && len(report.SINF) != 0 {
@@ -366,10 +456,11 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 	if len(report.SINF) != 0 || captureManifest != nil || modelPath != "" {
 		report.Ready = len(report.Errors) == 0 && report.Checks["current_sinf_layout"] &&
 			(captureManifest == nil || report.Checks["capture_integrity"] && report.Checks["supported_fairplayd"] && report.Checks["capture_selector_match"]) &&
-			(modelPath == "" || report.Checks["selector_match"])
+			(modelPath == "" || report.Checks["sinf_model_validation"])
 	} else if report.Host != nil {
 		report.Ready = report.Checks["supported_fairplayd"] && report.Checks["native_state_accessible"] && report.Checks["hardware_iomac"]
 	}
+	report.DecryptReady = modelPath != "" && report.Ready && report.CompatibleModel != ""
 	return report
 }
 

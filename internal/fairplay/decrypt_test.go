@@ -1,12 +1,70 @@
 package fairplay
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestIPAInventoryDuplicateDirectoryMarkers(t *testing.T) {
+	type zipMember struct{ name, body string }
+	for _, test := range []struct {
+		name, want string
+		members    []zipMember
+	}{
+		{
+			name: "empty directory markers are harmless",
+			want: "contains no supported encrypted Mach-O images",
+			members: []zipMember{
+				{"Payload/App.app/", ""}, {"Payload/App.app/", ""},
+			},
+		},
+		{
+			name: "duplicate regular files remain rejected",
+			want: `duplicate IPA member "Payload/App.app/data"`,
+			members: []zipMember{
+				{"Payload/App.app/data", "one"}, {"Payload/App.app/data", "two"},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "App.ipa")
+			output, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			archive := zip.NewWriter(output)
+			for _, member := range test.members {
+				writer, err := archive.Create(member.name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.Write([]byte(member.body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := archive.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := output.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_, opened, err := openIPAInventory(path)
+			if opened != nil {
+				opened.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("inventory error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
 
 func TestAuditARM64AcceptsARMv82HalfPrecisionSIMD(t *testing.T) {
 	words := []uint32{
@@ -63,11 +121,32 @@ func TestFirstARM64AuditPageSkipsEncryptedDataPage(t *testing.T) {
 	}
 }
 
-func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
+func TestAuditAdditionalARM64PagesRejectsWrongPageKey(t *testing.T) {
+	const start = pageBytes
+	ranges := []machoFileRange{{offset: start, size: 4 * pageBytes}}
+	output := make([]byte, 5*pageBytes)
+	for index := 0; index < 4; index++ {
+		for offset := start + index*pageBytes; offset < start+(index+1)*pageBytes; offset += 4 {
+			binary.LittleEndian.PutUint32(output[offset:offset+4], 0xd503201f) // nop
+		}
+	}
+	if err := auditAdditionalARM64Pages(output, start, 4, 0, ranges); err != nil {
+		t.Fatal(err)
+	}
+	for offset := start + pageBytes; offset < len(output); offset++ {
+		output[offset] = 0xff
+	}
+	if err := auditAdditionalARM64Pages(output, start, 4, 0, ranges); err == nil {
+		t.Fatal("invalid later code pages were accepted")
+	}
+}
+
+func TestDecryptUniversalSliceUsesEachPageOffset(t *testing.T) {
 	blob, layout := signedAuditFixture(t, pageBytes, 2*pageBytes, 12, 2)
 	layout.cpuType = cpuTypeARM64
 	layout.cryptID = 1
 	layout.cryptIDOffset = 16
+	layout.instructionRanges = []machoFileRange{{offset: uint64(layout.cryptOffset), size: uint64(layout.cryptSize)}}
 	binary.LittleEndian.PutUint32(blob[layout.cryptIDOffset:], 1)
 
 	image := encryptedImage{
@@ -90,7 +169,7 @@ func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
 	for page := range records {
 		key := deriver.pageKey(
 			records[page][:16],
-			image.sliceOffset+uint64(layout.cryptOffset),
+			image.sliceOffset+uint64(layout.cryptOffset)+uint64(page*pageBytes),
 		)
 		block, err := aes.NewCipher(key[:])
 		if err != nil {
@@ -118,7 +197,7 @@ func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(blob[pageBytes:3*pageBytes], plaintext) {
-		t.Fatal("universal slice did not decrypt with its encrypted-region offset")
+		t.Fatal("universal slice did not decrypt with each encrypted page offset")
 	}
 	if report.EncryptedSHA256 != encryptedHash || report.DecryptedSHA256 != digest(blob) {
 		t.Fatalf("unexpected image hashes: %+v", report)
