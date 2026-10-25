@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	pageBytes                            = 4096
+	pageBytes                           = 4096
 	minimumARM64InstructionValidPercent = 90
 )
 
@@ -350,6 +350,28 @@ func auditARM64FirstPage(page []byte, pageOffset uint64, ranges []machoFileRange
 	return valid, words, mnemonics
 }
 
+func firstARM64AuditPage(start, end int, ranges []machoFileRange) (int, bool) {
+	if len(ranges) == 0 {
+		return start, start >= 0 && start+pageBytes <= end
+	}
+	result := end
+	for _, section := range ranges {
+		intersection := max(uint64(start), section.offset)
+		intersectionEnd := min(uint64(end), section.offset+section.size)
+		if intersection >= intersectionEnd {
+			continue
+		}
+		page := int(intersection) &^ (pageBytes - 1)
+		if page < start {
+			page = start
+		}
+		if page+pageBytes <= end && page < result {
+			result = page
+		}
+	}
+	return result, result != end
+}
+
 func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask [16]byte, deriver *pageKeyDeriver) (*imageReport, error) {
 	if image.layout.cryptID != 1 {
 		return nil, fmt.Errorf("%s: expected cryptid 1", image.member)
@@ -382,16 +404,42 @@ func decryptImage(output []byte, image encryptedImage, records [][32]byte, mask 
 		keysHash.Write(key[:])
 	}
 	clear(keys)
-	first := output[start : start+pageBytes]
+	auditPageStart := start
 	valid, instructionWords, mnemonics := 0, 0, map[string]int(nil)
 	structurallyPlausible := false
 	if isARM64InstructionSet(image.layout.cpuType) {
-		valid, instructionWords, mnemonics = auditARM64FirstPage(first, uint64(start), image.layout.instructionRanges)
-		structurallyPlausible = instructionWords > 0 && valid*100 >= instructionWords*minimumARM64InstructionValidPercent
+		bestValid, bestWords, bestStart := 0, 0, start
+		legacyValid, legacyMnemonics := auditARM64(output[start : start+pageBytes])
+		if legacyValid*100 >= (pageBytes/4)*minimumARM64InstructionValidPercent {
+			valid, instructionWords, mnemonics = legacyValid, pageBytes/4, legacyMnemonics
+			structurallyPlausible = true
+		} else {
+			bestValid, bestWords = legacyValid, pageBytes/4
+		}
+		firstCandidate, hasSections := firstARM64AuditPage(start, end, image.layout.instructionRanges)
+		for candidate := firstCandidate; !structurallyPlausible && hasSections && candidate+pageBytes <= end; candidate += pageBytes {
+			observed, words, counts := auditARM64FirstPage(
+				output[candidate:candidate+pageBytes], uint64(candidate), image.layout.instructionRanges,
+			)
+			if words == 0 {
+				continue
+			}
+			if observed*bestWords > bestValid*words {
+				bestValid, bestWords, bestStart = observed, words, candidate
+			}
+			if observed*100 >= words*minimumARM64InstructionValidPercent {
+				auditPageStart = candidate
+				valid, instructionWords, mnemonics = observed, words, counts
+				structurallyPlausible = true
+				break
+			}
+		}
 		if !structurallyPlausible {
-			return nil, fmt.Errorf("%s: first executable page has only %d/%d valid ARM64 words", image.member, valid, instructionWords)
+			best := output[bestStart : bestStart+pageBytes]
+			return nil, fmt.Errorf("%s: best executable page has only %d/%d valid ARM64 words (SHA-256 %s)", image.member, bestValid, bestWords, digest(best))
 		}
 	}
+	first := output[auditPageStart : auditPageStart+pageBytes]
 	binary.LittleEndian.PutUint32(output[id:id+4], 0)
 	if sha256.Sum256(output[:id]) != prefixDigest ||
 		sha256.Sum256(output[id+4:start]) != headerDigest ||

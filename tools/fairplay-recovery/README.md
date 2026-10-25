@@ -24,28 +24,28 @@ automatic fault-discovery features.
 
 | Profile | Status |
 | --- | --- |
-| `26A428` (`-tags fairplay26a428`, including the checked fairplayd slice shipped on macOS `26A434`) | Full recovery and end-to-end IPA decryption proven for a matching modern Apple Account enrollment |
+| `26A428` (`-tags fairplayrawsource`, including the checked fairplayd slice shipped on macOS `26A434`) | Pure-Go recovery and end-to-end IPA decryption proven for modern accounts and the preserved older key-5 account |
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
 | `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery with an embedded sanitized build model; a private 16-byte enrollment frame is supplied at runtime |
 | `26A428` frame evaluator (`-tags fairplayframe`) | Pure-Go direct evaluator with an embedded sanitized build model; exact across two independent enrollment inputs |
 | `26A428` state-slot evaluator (`-tags fairplaystate`) | Pure-Go 14-slot transform with an embedded sanitized build model; every retained native slot matches across two enrollments |
 | All other fairplayd builds | Unsupported until their evaluator and fault map are generated and differentially validated |
 
-Only modern App Store enrollments from newly created Apple Accounts are in
-scope. Legacy or migrated accounts are not currently supported. Do not infer
-support from the macOS product version alone: the exact build and fairplayd
-SHA-256 must match.
+Modern enrollments and the preserved older `bbbbbbbb:00000005` layout are in
+scope. Other legacy or migrated layouts remain unproven. Do not infer support
+from the macOS product version alone: the exact build and fairplayd SHA-256
+must match.
 
 ## What the private model represents
 
-“Generated once” means once per exact fairplayd build and local App Store
-enrollment. The private model is a snapshot-derived set of registers, memory
-pages, and generated lookup tables from the white-box entry. It is not a
-generic model for every user, and another person's model must not be reused.
+“Generated once” means once per local App Store enrollment and selector. The
+private model contains the recovered current-SINF key plus build-global
+decoding tables. It is not a generic model for every user, and another person's
+model must not be reused.
 
-Before capture, the fresh Apple Account must have completed native App Store
-setup and a free app must have been installed and opened through the Mac App
-Store. Downloading only through ipatool does not initialize the same native
+Before capture, the Apple Account must have completed native App Store setup
+and a free app must have been installed and opened through the Mac App Store.
+Downloading only through ipatool does not initialize the same native
 enrollment. `ipatool fairplay-enroll collect` creates the private bundle and
 `fairplay-enroll recover` runs the packaged offline trace. Neither command
 attaches to the live fairplayd process or provisions an Apple Account.
@@ -79,10 +79,12 @@ ipatool fairplay-enroll recover \
   --output /private/path/App.recovery
 ```
 
-The recover command uses the Python tools in `python/`, the sanitized
-account-independent startup state in `profiles/`, and the Go evaluator in this
-directory. It requires `uv` and a Go toolchain. The capture and recovery output
-directories are private and must not already exist.
+The recover command builds the tagged Go helper in this directory and uses the
+sanitized account-independent state in `profiles/`. It requires the Go
+toolchain, but not Python, uv, Unicorn, or Apple binaries at runtime. The
+capture and recovery output directories are private and must not already
+exist. The scripts in `python/` remain maintainer-only generators and
+differential references.
 
 The packaged startup profile initializes only deterministic build state. Its
 contents and privacy boundary are documented in `profiles/README.md`; all
@@ -335,7 +337,7 @@ scalar register, condition flag, and all 236 dynamic memory pages. The complete
 Go path then reproduces both native 224-byte sources exactly. It runs in well
 under one second after the private model has been loaded.
 
-The build embeds a sanitized 436-KiB account-independent model captured before
+The build embeds a sanitized one-MiB account-independent model captured before
 the installed SINF and SUPF are opened. Its executable-path page is zero and
 supplied at runtime. Two independent accounts have identical state at this
 boundary apart from that path, and privacy audits find no account-specific
@@ -343,8 +345,11 @@ SINF, SIDB, source, hardware address, or retained path material.
 
 The complete Go path reproduces three Mac controls, including the preserved
 630-byte older-account SIDB. Its 192-byte source matches the native 26A428
-reference without using the iPhone/iOS 16 secret. Python and Unicorn are no
-longer required to construct the account-entry state or `+0x304` source.
+reference without using the iPhone/iOS 16 secret. It then follows natural slot
+selection, frame construction, SIDB consumption, and current-SINF key
+construction. The older-account enrollment model is byte-identical to the
+prior independent Mac recovery and decrypts WhatsApp 25.17.6 to the established
+9-image/27,604-page output.
 
 Build and run it directly from the captured inputs:
 
@@ -353,7 +358,7 @@ go build -tags fairplayrawsource -o /private/tmp/fairplay-source \
   ./tools/fairplay-recovery
 
 /private/tmp/fairplay-source \
-  --raw-source-kernel enrollment-full \
+  --raw-source-kernel enrollment-sinf \
   --raw-source-executable-path /Applications/App.app/App \
   --raw-source-file '/App=/private/path/App-executable' \
   --raw-source-file 'App.sinf=/private/path/App.sinf' \
@@ -361,14 +366,12 @@ go build -tags fairplayrawsource -o /private/tmp/fairplay-source \
   --raw-source-file 'App.supf=/private/path/App.supf' \
   --raw-source-file '/var/db/fpsd/SC Info/SC Info.sidb=/private/path/SC Info.sidb' \
   --raw-source-mac /private/path/iomac.bin \
-  --raw-source-output /private/path/source-224.bin \
-  --raw-source-bytes 224
+  --raw-source-enrollment-output /private/path/fairplay-enrollment.bin
 ```
 
-All private input files must be owner-only regular files. The IOMACAddress file may
-contain six raw bytes or a colon-separated hexadecimal address. A 192-byte
-source is selected with `--raw-source-bytes 192` for the shorter accepted
-layout.
+All private input files must be owner-only regular files. The IOMACAddress file
+may contain six raw bytes or a colon-separated hexadecimal address. The output
+model is selector-bound and remains private.
 
 Use an already recovered external model without placing it in the ipatool
 repository:

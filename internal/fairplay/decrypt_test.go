@@ -54,6 +54,15 @@ func TestAuditARM64FirstPageUsesInstructionSections(t *testing.T) {
 	}
 }
 
+func TestFirstARM64AuditPageSkipsEncryptedDataPage(t *testing.T) {
+	start, end := 0x4000, 0x40000
+	ranges := []machoFileRange{{offset: 0x5d10, size: 0x32cf8}}
+	page, ok := firstARM64AuditPage(start, end, ranges)
+	if !ok || page != 0x5000 {
+		t.Fatalf("audit page = %#x, %v; want %#x, true", page, ok, 0x5000)
+	}
+}
+
 func TestDecryptUniversalSliceUsesEncryptedRegionOffset(t *testing.T) {
 	blob, layout := signedAuditFixture(t, pageBytes, 2*pageBytes, 12, 2)
 	layout.cpuType = cpuTypeARM64

@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/majd/ipatool/v2/internal/fairplay"
 	"github.com/spf13/cobra"
@@ -83,7 +86,7 @@ func resolveRecoveryScript(explicit string) (string, error) {
 	return "", errors.New("FairPlay recovery script was not found; run from the ipatool source tree or pass --script")
 }
 
-func runFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverOptions) error {
+func runLegacyFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverOptions) error {
 	if options.Capture == "" || options.Output == "" {
 		return errors.New("recovery requires capture and output paths")
 	}
@@ -118,6 +121,165 @@ func runFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverO
 	return nil
 }
 
+func resolveRecoverySourceRoot() (string, error) {
+	candidates := []string{"."}
+	if executable, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Dir(executable))
+	}
+	for _, candidate := range candidates {
+		target := filepath.Join(candidate, "tools", "fairplay-recovery")
+		if info, err := os.Stat(target); err == nil && info.IsDir() {
+			absolute, absoluteErr := filepath.Abs(candidate)
+			if absoluteErr != nil {
+				return "", absoluteErr
+			}
+			return absolute, nil
+		}
+	}
+	return "", errors.New("Go FairPlay recovery source was not found; run from the ipatool source tree")
+}
+
+func privateRecoveryFile(path string, value []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(value); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverOptions) error {
+	if options.Capture == "" || options.Output == "" {
+		return errors.New("recovery requires capture and output paths")
+	}
+	manifest, err := fairplay.LoadEnrollmentCapture(options.Capture, true)
+	if err != nil {
+		return fmt.Errorf("validate enrollment capture: %w", err)
+	}
+	if manifest.IPA == nil {
+		return errors.New("enrollment capture has no matching IPA")
+	}
+	if err := os.Mkdir(options.Output, 0o700); err != nil {
+		return err
+	}
+	root, err := resolveRecoverySourceRoot()
+	if err != nil {
+		return err
+	}
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		return errors.New("Go FairPlay recovery requires the Go toolchain")
+	}
+	temporary, err := os.CreateTemp(options.Output, ".fairplay-source-*")
+	if err != nil {
+		return err
+	}
+	helper := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(helper); err != nil {
+		return err
+	}
+	defer os.Remove(helper)
+	build := exec.CommandContext(ctx, goTool, "build", "-tags", "fairplayrawsource", "-o", helper, "./tools/fairplay-recovery")
+	build.Dir, build.Stdout, build.Stderr = root, os.Stdout, os.Stderr
+	if err := build.Run(); err != nil {
+		return fmt.Errorf("build Go FairPlay recovery: %w", err)
+	}
+	if err := os.Chmod(helper, 0o700); err != nil {
+		return err
+	}
+
+	executableName := manifest.App.Executable
+	executablePath := manifest.App.ExecutablePath
+	if executablePath == "" {
+		executablePath = filepath.Join("/Applications", executableName+".app", executableName)
+	}
+	capturePath := func(relative string) string {
+		return filepath.Join(options.Capture, filepath.FromSlash(relative))
+	}
+	arguments := []string{
+		"--raw-source-kernel", "enrollment-sinf",
+		"--raw-source-executable-path", executablePath,
+		"--raw-source-file", "/" + executableName + "=" + capturePath("app/executable"),
+		"--raw-source-file", executableName + ".sinf=" + capturePath(manifest.App.SINFPath),
+		"--raw-source-file", executableName + ".v5.supf=" + capturePath("app/SC_Info/"+executableName+".v5.supf"),
+		"--raw-source-file", executableName + ".supf=" + capturePath("app/SC_Info/"+executableName+".supf"),
+		"--raw-source-mac", capturePath(manifest.HardwareMAC.Path),
+	}
+	stateDirectory := capturePath("state/fpsd-sc-info")
+	entries, err := os.ReadDir(stateDirectory)
+	if err != nil {
+		return fmt.Errorf("read captured fpsd state: %w", err)
+	}
+	var stateFiles []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "SC Info.") {
+			stateFiles = append(stateFiles, entry.Name())
+		}
+	}
+	sort.Strings(stateFiles)
+	if len(stateFiles) == 0 {
+		return errors.New("capture has no fpsd SC Info state")
+	}
+	for _, name := range stateFiles {
+		arguments = append(arguments, "--raw-source-file", "/var/db/fpsd/SC Info/"+name+"="+filepath.Join(stateDirectory, name))
+	}
+	candidate := filepath.Join(options.Output, "fairplay-enrollment.candidate.bin")
+	arguments = append(arguments, "--raw-source-enrollment-output", candidate)
+	recover := exec.CommandContext(ctx, helper, arguments...)
+	recover.Stdout, recover.Stderr = os.Stdout, os.Stderr
+	if err := recover.Run(); err != nil {
+		return fmt.Errorf("derive Go FairPlay enrollment: %w", err)
+	}
+
+	ipa := capturePath(manifest.IPA.Path)
+	decrypted := filepath.Join(options.Output, "App.decrypted.ipa")
+	decryptionReport := filepath.Join(options.Output, "App.decrypted.json")
+	result, err := fairplay.DecryptIPA(fairplay.DecryptOptions{
+		InputPath: ipa, OutputPath: decrypted, ReportPath: decryptionReport, ModelPath: candidate,
+	})
+	if err != nil {
+		return fmt.Errorf("validate recovered FairPlay enrollment: %w", err)
+	}
+	enrollment := filepath.Join(options.Output, "fairplay-enrollment.bin")
+	if err := os.Rename(candidate, enrollment); err != nil {
+		return err
+	}
+	summary := map[string]any{
+		"schema": "ipatool-fairplay-enrollment-recovery-v2", "success": true,
+		"selector": manifest.App.SelectorID, "fairplayd_sha256": manifest.FairPlayd.SHA256,
+		"enrollment_model": enrollment, "decrypted_ipa": decrypted,
+		"decrypted_ipa_sha256": result.OutputSHA256, "encrypted_images": result.EncryptedImages,
+		"decrypted_pages": result.DecryptedPages, "all_cryptids_zero": true,
+		"all_code_directory_slots_match": true, "runtime": "pure-go-26a428",
+	}
+	document, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return err
+	}
+	document = append(document, '\n')
+	report := filepath.Join(options.Output, "recovery-report.json")
+	if err := privateRecoveryFile(report, document); err != nil {
+		return err
+	}
+	dependencies.Logger.Log().Str("model", enrollment).Str("decrypted", decrypted).Str("report", report).Bool("success", true).Send()
+	return nil
+}
+
+func runFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecoverOptions) error {
+	if options.Script != "" || os.Getenv("IPATOOL_FAIRPLAY_RECOVERY_SCRIPT") != "" {
+		return runLegacyFairplayEnrollmentRecovery(ctx, options)
+	}
+	return runGoFairplayEnrollmentRecovery(ctx, options)
+}
+
 func fairplayEnrollRecoverCmd() *cobra.Command {
 	var options fairplayRecoverOptions
 	cmd := &cobra.Command{
@@ -129,9 +291,9 @@ func fairplayEnrollRecoverCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&options.Capture, "capture", "", "Private capture directory from fairplay-enroll collect (required)")
 	cmd.Flags().StringVar(&options.Output, "output", "", "New private recovery output directory (required)")
-	cmd.Flags().StringVar(&options.Script, "script", "", "Explicit recover_capture.py path")
-	cmd.Flags().StringVar(&options.CompatFairPlayd, "compat-fairplayd", "", "Exact checked 26A428 arm64e fairplayd used to recover a 26B118 capture")
-	cmd.Flags().BoolVar(&options.SkipDifferential, "skip-differential", false, "Skip the Unicorn differential (unsafe except for development regression)")
+	cmd.Flags().StringVar(&options.Script, "script", "", "Use the explicit legacy Python recover_capture.py instead of pure Go")
+	cmd.Flags().StringVar(&options.CompatFairPlayd, "compat-fairplayd", "", "Legacy Python path: exact checked 26A428 arm64e fairplayd")
+	cmd.Flags().BoolVar(&options.SkipDifferential, "skip-differential", false, "Legacy Python path: skip the Unicorn differential")
 	_ = cmd.MarkFlagRequired("capture")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd

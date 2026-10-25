@@ -45,7 +45,7 @@ var activeRawSourceRuntime *rawSourceRuntime
 const rawSourceErrnoAddress = uint64(0x7100FFF00000)
 
 func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, macPath, executablePath string, stopPC uint64) error {
-	runtimeKernel := kernel == "account-cfg" || kernel == "enrollment-full" || kernel == "bootstrap-cfg" || kernel == "bootstrap-full"
+	runtimeKernel := kernel == "account-cfg" || kernel == "enrollment-full" || kernel == "enrollment-frame" || kernel == "enrollment-sinf" || kernel == "bootstrap-cfg" || kernel == "bootstrap-full"
 	if !runtimeKernel {
 		if len(fileSpecs) != 0 || macPath != "" || executablePath != "" || stopPC != 0 {
 			return fmt.Errorf("raw source runtime inputs require an account or bootstrap CFG kernel")
@@ -74,7 +74,7 @@ func configureRawSourceRuntime(value *model, kernel string, fileSpecs []string, 
 	if maxStaticAllocation != 0 {
 		runtime.nextAllocation = (maxStaticAllocation + 0x100000) &^ 0xFFFFF
 	}
-	accountKernel := kernel == "account-cfg" || kernel == "enrollment-full"
+	accountKernel := kernel == "account-cfg" || kernel == "enrollment-full" || kernel == "enrollment-frame" || kernel == "enrollment-sinf"
 	if accountKernel {
 		if executablePath == "" || len(executablePath) >= int(pageSize) {
 			return fmt.Errorf("account-entry parser requires a bounded installed executable path")
@@ -254,6 +254,16 @@ func (r *rawSourceRuntime) handle(s *state, pc uint64) (uint64, error) {
 		s.x[0] = end - start
 	case 0xF10000000001B000: // __error
 		s.x[0] = rawSourceErrnoAddress
+	case 0xF100000000003000: // gettimeofday
+		if s.x[0] != 0 {
+			if err := s.storeValue(s.x[0], 1_700_000_000, 8); err != nil {
+				return pc, err
+			}
+			if err := s.storeValue(s.x[0]+8, 0, 8); err != nil {
+				return pc, err
+			}
+		}
+		s.x[0] = 0
 	case 0xF10000000002F000: // IOMainPort
 		if s.x[1] != 0 {
 			if err := s.storeValue(s.x[1], 1, 4); err != nil {
@@ -392,6 +402,47 @@ func runRawSource(value *model, kernel string, loop bool, exactIterations int) (
 		}
 		return worker.digest(), iterations, nil
 	}
+	if kernel == "enrollment-frame" {
+		if loop || exactIterations != 0 {
+			return "", 0, fmt.Errorf("enrollment-frame owns its complete natural path")
+		}
+		if _, _, err := runRawSourceAccountEntryCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		if _, _, err := runRawSourceBootstrapCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		iterations, err := runRawSourceKernelLoop(worker, "outer")
+		if err != nil {
+			return "", iterations, err
+		}
+		if _, _, err := runRawSourceSelectionCFG(worker, activeRawSourceRuntime, 2_000_000); err != nil {
+			return "", iterations, err
+		}
+		return worker.digest(), iterations, nil
+	}
+	if kernel == "enrollment-sinf" {
+		if loop || exactIterations != 0 {
+			return "", 0, fmt.Errorf("enrollment-sinf owns its complete natural path")
+		}
+		if _, _, err := runRawSourceAccountEntryCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		if _, _, err := runRawSourceBootstrapCFG(worker, activeRawSourceRuntime, 1_000_000); err != nil {
+			return "", 0, err
+		}
+		iterations, err := runRawSourceKernelLoop(worker, "outer")
+		if err != nil {
+			return "", iterations, err
+		}
+		if _, _, err := runRawSourceSelectionCFG(worker, activeRawSourceRuntime, 2_000_000); err != nil {
+			return "", iterations, err
+		}
+		if _, _, err := runRawSourceSINFEntryCFG(worker, activeRawSourceRuntime, 2_000_000); err != nil {
+			return "", iterations, err
+		}
+		return worker.digest(), iterations, nil
+	}
 	if kernel == "bootstrap-full" {
 		if loop || exactIterations != 0 {
 			return "", 0, fmt.Errorf("bootstrap-full owns its complete natural loop")
@@ -486,6 +537,107 @@ func currentRawSourceBytes(size int) ([]byte, error) {
 		return nil, fmt.Errorf("raw source output size must be 192 or 224 bytes")
 	}
 	return lastRawSourceState.outputBytes(0x7000000FB304, size)
+}
+
+func currentRawSourceFrameBytes() ([]byte, error) {
+	if lastRawSourceState == nil {
+		return nil, fmt.Errorf("raw source state is unavailable")
+	}
+	return lastRawSourceState.outputBytes(0x7000000FB724, 16)
+}
+
+func currentRawSourceSINFMaterialBytes() ([]byte, error) {
+	if lastRawSourceState == nil {
+		return nil, fmt.Errorf("raw source state is unavailable")
+	}
+	if lastRawSourceState.x[29] < 0x70 {
+		return nil, fmt.Errorf("current-SINF frame pointer is invalid")
+	}
+	return lastRawSourceState.outputBytes(lastRawSourceState.x[29]-0x70, 16)
+}
+
+func rawSourceAtom(blob []byte, start, limit int, name string) (int, int, error) {
+	for cursor := start; cursor < limit; {
+		if limit-cursor < 8 {
+			return 0, 0, fmt.Errorf("SINF atom list is truncated")
+		}
+		size := int(binary.BigEndian.Uint32(blob[cursor : cursor+4]))
+		if size < 8 || size > limit-cursor {
+			return 0, 0, fmt.Errorf("SINF atom has invalid bounds")
+		}
+		if string(blob[cursor+4:cursor+8]) == name {
+			return cursor + 8, cursor + size, nil
+		}
+		cursor += size
+	}
+	return 0, 0, fmt.Errorf("SINF has no %q atom", name)
+}
+
+func rawSourceSINFSelector(blob []byte) (uint32, uint32, error) {
+	rootStart, rootEnd, err := rawSourceAtom(blob, 0, len(blob), "sinf")
+	if err != nil || rootStart != 8 || rootEnd != len(blob) {
+		return 0, 0, fmt.Errorf("SINF root is invalid")
+	}
+	schiStart, schiEnd, err := rawSourceAtom(blob, rootStart, rootEnd, "schi")
+	if err != nil {
+		return 0, 0, err
+	}
+	values := [2]uint32{}
+	for index, name := range []string{"user", "key "} {
+		start, end, atomErr := rawSourceAtom(blob, schiStart, schiEnd, name)
+		if atomErr != nil || end-start != 4 {
+			return 0, 0, fmt.Errorf("SINF selector atom %q is invalid", name)
+		}
+		values[index] = binary.BigEndian.Uint32(blob[start:end])
+	}
+	return values[0], values[1], nil
+}
+
+func currentRawSourceEnrollmentPack() ([]byte, error) {
+	material, err := currentRawSourceSINFMaterialBytes()
+	if err != nil {
+		return nil, err
+	}
+	var sinf []byte
+	if activeRawSourceRuntime != nil {
+		for suffix, data := range activeRawSourceRuntime.files {
+			if strings.HasSuffix(suffix, ".sinf") {
+				if sinf != nil {
+					return nil, fmt.Errorf("enrollment model requires exactly one installed SINF")
+				}
+				sinf = data
+			}
+		}
+	}
+	if sinf == nil {
+		return nil, fmt.Errorf("enrollment model requires one installed SINF mapping")
+	}
+	user, keyID, err := rawSourceSINFSelector(sinf)
+	if err != nil {
+		return nil, err
+	}
+	const modelBytes = 4184
+	pack := make([]byte, 0, modelBytes)
+	pack = append(pack, []byte("FPSENR2\x00")...)
+	var word [4]byte
+	binary.LittleEndian.PutUint32(word[:], 2)
+	pack = append(pack, word[:]...)
+	binary.LittleEndian.PutUint32(word[:], modelBytes)
+	pack = append(pack, word[:]...)
+	pack = append(pack, rawSourceBinaryHash[:]...)
+	binary.LittleEndian.PutUint32(word[:], user)
+	pack = append(pack, word[:]...)
+	binary.LittleEndian.PutUint32(word[:], keyID)
+	pack = append(pack, word[:]...)
+	for index, value := range material {
+		pack = append(pack, value^generatedCurrentSINFKeyMask[index])
+	}
+	pack = append(pack, generatedCurrentSINFWhitening[:]...)
+	pack = append(pack, generatedCurrentSINFInputDecode[:]...)
+	if len(pack) != modelBytes {
+		return nil, fmt.Errorf("generated enrollment model has invalid size %d", len(pack))
+	}
+	return pack, nil
 }
 
 func runRawSourceKernelIteration(worker *state, kernel string) (bool, error) {

@@ -5,7 +5,7 @@ package main
 import "testing"
 
 func TestEmbeddedRawSourceModelHasNoExecutablePath(t *testing.T) {
-	if len(rawSourceModel) == 0 || len(rawSourceModel) > 1024*1024 {
+	if len(rawSourceModel) == 0 || len(rawSourceModel) > 2*1024*1024 {
 		t.Fatalf("embedded raw-source model size = %d", len(rawSourceModel))
 	}
 	value, err := loadModelBytes(rawSourceModel)
