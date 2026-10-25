@@ -26,6 +26,7 @@ automatic fault-discovery features.
 
 | Profile | Status |
 | --- | --- |
+| `25G83` archived native capture | Portable current-SINF contract verified end to end with the preserved older selector-5 enrollment; the captured daemon is provenance and is not executed |
 | `26A428` (`-tags fairplayrawsource`, including the checked fairplayd slice shipped on macOS `26A434`) | Pure-Go recovery and end-to-end IPA decryption proven for modern accounts and the preserved older key-5 account |
 | `26B118` capture | End-to-end recovery is proven through the checked 26A428 CBC compatibility evaluator; the native V3 consumer remains research-only |
 | `26A428` SIDB bulk decoder (`-tags fairplaysidb`) | Pure-Go recovery with an embedded sanitized build model; a private 16-byte enrollment frame is supplied at runtime |

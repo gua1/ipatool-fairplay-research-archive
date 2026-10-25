@@ -27,6 +27,19 @@ func TestFairPlayCommandsAreRegistered(t *testing.T) {
 	}
 }
 
+func TestFairPlayEnrollCollectExposesArchivedBuildMetadata(t *testing.T) {
+	root := rootCmd()
+	collect, _, err := root.Find([]string{"fairplay-enroll", "collect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"product-version", "build-version"} {
+		if collect.Flags().Lookup(name) == nil {
+			t.Fatalf("fairplay-enroll collect has no --%s flag", name)
+		}
+	}
+}
+
 func TestResolveRecoveryScriptExplicit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recover_capture.py")
 	if err := os.WriteFile(path, []byte("pass\n"), 0o600); err != nil {

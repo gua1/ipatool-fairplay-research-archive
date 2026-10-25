@@ -53,6 +53,8 @@ func fairplayEnrollCollectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&options.ADIPath, "adi-state", "", "Native ADI state directory")
 	cmd.Flags().StringVar(&options.MACAddressPath, "iomac-file", "", "Private six-byte IOMACAddress file (otherwise read built-in IORegistry interface)")
 	cmd.Flags().StringVar(&options.HardwareInterface, "interface", "en0", "Built-in IORegistry network interface")
+	cmd.Flags().StringVar(&options.ProductVersion, "product-version", "", "Archived source macOS product version (defaults to the running system)")
+	cmd.Flags().StringVar(&options.BuildVersion, "build-version", "", "Archived source macOS build version (defaults to the running system)")
 	_ = cmd.MarkFlagRequired("app")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd
@@ -272,7 +274,8 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 	summary := map[string]any{
 		"schema": "ipatool-fairplay-enrollment-recovery-v2", "success": true,
 		"selector": manifest.App.SelectorID, "fairplayd_sha256": manifest.FairPlayd.SHA256,
-		"fairplayd_status": manifest.FairPlay.Status, "fairplayd_independently_verified": manifest.FairPlay.Decrypt,
+		"fairplayd_status": manifest.FairPlay.Status, "capture_profile_independently_verified": manifest.FairPlay.Decrypt,
+		"fairplayd_independently_verified": manifest.FairPlay.Decrypt, "validation_basis": manifest.FairPlay.ValidationBasis,
 		"canonical_contract": canonicalInput.Contract, "canonical_input_sha256": canonicalInput.FingerprintSHA256,
 		"enrollment_model": enrollment, "decrypted_ipa": decrypted,
 		"decrypted_ipa_sha256": result.OutputSHA256, "encrypted_images": result.EncryptedImages,

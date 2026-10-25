@@ -72,6 +72,11 @@ func TestInspectSINFAndModel(t *testing.T) {
 }
 
 func TestFairPlayBuildRecoverySupport(t *testing.T) {
+	legacy, ok := LookupFairPlayBuild(FairPlayBuild25G83Hash)
+	if !ok || !legacy.Recovery || !legacy.Decrypt || legacy.Status != "portable-contract-verified" ||
+		legacy.ValidationBasis != "canonical-contract-with-portable-evaluator" || legacy.CompatibilitySHA256 != FairPlayBuild26A428Hash {
+		t.Fatalf("25G83 support = %#v, %v", legacy, ok)
+	}
 	stable, ok := LookupFairPlayBuild(FairPlayBuild26A428Hash)
 	if !ok || !stable.Recovery || !stable.Decrypt {
 		t.Fatalf("26A428 support = %#v, %v", stable, ok)

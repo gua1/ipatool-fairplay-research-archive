@@ -420,7 +420,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 		}
 	}
 	if captureManifest != nil || len(report.SINF) != 0 {
-		report.Warnings = append(report.Warnings, "SINF geometry cannot prove account age; current support assumes a newly created, natively enrolled Apple Account")
+		report.Warnings = append(report.Warnings, "SINF geometry cannot prove account age; untested migrated or legacy enrollment layouts still fail closed")
 	}
 	if modelPath != "" {
 		models, err := inspectModelPath(modelPath)

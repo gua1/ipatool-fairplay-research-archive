@@ -87,6 +87,7 @@ layouts remain unproven and fail closed.
 
 | Host/FairPlay profile | Recovery status | End-to-end IPA status |
 | --- | --- | --- |
+| macOS build `25G83`, arm64e fairplayd SHA-256 `93b8db9c…3da4c5` | Portable current-SINF contract verified from archived native state | Older selector-5 capture recovered and its matching IPA passed every validation check |
 | macOS 27.0.1 `26A434` with arm64e fairplayd SHA-256 `1e58d37e…e4ea1784` | Supported by the pure-Go `macos26a428` profile | Revalidated with per-page offsets across modern and older-account IPAs |
 | arm64e fairplayd SHA-256 `f68e4407…4964439d` (`26B118` profile) | Supported through the embedded 26A428 compatibility path | Revalidated with an external account: 39 images and 10,080 pages |
 | Any other arm64e fairplayd hash using the current SINF/state contract | Automatic portable compatibility attempt | Unverified until recovery validates the complete SINF and matching IPA |
@@ -249,9 +250,10 @@ it contains private account-derived key material.
    Continue only with a build listed as supported above. A close build number
    is not compatible.
 
-2. Create a new Apple Account. Sign in with it in the native Mac App Store and
-   complete all first-use prompts and Store terms. Do not reuse an older or
-   migrated account for the currently supported path.
+2. A fresh Apple Account remains the most predictable setup. Sign in with it
+   in the native Mac App Store and complete all first-use prompts and Store
+   terms. One preserved older selector-5 enrollment is also proven; other
+   migrated or legacy account layouts are attempted but remain unverified.
 
 3. In the native App Store, obtain and install a free app. Launch that installed
    app once and wait for it to finish opening. This causes macOS to create the
@@ -272,6 +274,11 @@ it contains private account-derived key material.
      --ipa /private/path/App.ipa \
      --output /private/path/App.capture
    ```
+
+   To package a complete archived capture on another host, pass the source OS
+   metadata explicitly with `--product-version` and `--build-version`. These
+   values only identify the archived fairplayd and state; they do not make
+   files from different machines or enrollments compatible.
 
 5. Inspect the bundle before recovery. The report contains hashes and geometry,
    not passwords or plaintext keys:

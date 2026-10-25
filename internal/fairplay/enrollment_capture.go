@@ -25,6 +25,7 @@ import (
 const EnrollmentCaptureSchema = "ipatool-fairplay-native-enrollment-capture-v1"
 
 const (
+	FairPlayBuild25G83Hash  = "93b8db9c7140cedbd04a3bbbce297b68ba9060e8a4f39ef52a1017964f3da4c5"
 	FairPlayBuild26A428Hash = "1e58d37e9602dd0ca5e24b14762063b6c310248b4d3a94272771d815e4ea1784"
 	FairPlayBuild26B118Hash = "f68e4407e90af5466d2766e1b1c4637260d08cb0518f991e1797ac6c4964439d"
 )
@@ -33,6 +34,7 @@ type FairPlayBuildSupport struct {
 	Profile              string `json:"profile"`
 	Build                string `json:"build"`
 	Status               string `json:"status"`
+	ValidationBasis      string `json:"validation_basis,omitempty"`
 	Recovery             bool   `json:"recovery"`
 	Decrypt              bool   `json:"end_to_end_decryption"`
 	CompatibilityProfile string `json:"compatibility_profile,omitempty"`
@@ -40,11 +42,15 @@ type FairPlayBuildSupport struct {
 }
 
 var supportedFairPlayHashes = map[string]FairPlayBuildSupport{
+	FairPlayBuild25G83Hash: {
+		Profile: "portable-current-sinf", Build: "25G83", Status: "portable-contract-verified", ValidationBasis: "canonical-contract-with-portable-evaluator", Recovery: true, Decrypt: true,
+		CompatibilityProfile: "macos26a428", CompatibilitySHA256: FairPlayBuild26A428Hash,
+	},
 	FairPlayBuild26A428Hash: {
-		Profile: "macos26a428", Build: "26A428", Status: "supported", Recovery: true, Decrypt: true,
+		Profile: "macos26a428", Build: "26A428", Status: "supported", ValidationBasis: "exact-binary-profile-and-canonical-contract", Recovery: true, Decrypt: true,
 	},
 	FairPlayBuild26B118Hash: {
-		Profile: "macos26b118", Build: "26B118", Status: "supported-with-compatibility", Recovery: true, Decrypt: true,
+		Profile: "macos26b118", Build: "26B118", Status: "supported-with-compatibility", ValidationBasis: "canonical-contract-with-compatibility-evaluator", Recovery: true, Decrypt: true,
 		CompatibilityProfile: "macos26a428", CompatibilitySHA256: FairPlayBuild26A428Hash,
 	},
 }
@@ -72,6 +78,7 @@ func ResolveFairPlayBuildSupport(hash, build string) (FairPlayBuildSupport, bool
 		Profile:              "portable-current-sinf",
 		Build:                build,
 		Status:               "portable-validation-required",
+		ValidationBasis:      "complete-sinf-and-ipa-promotion-gate",
 		Recovery:             true,
 		Decrypt:              false,
 		CompatibilityProfile: "macos26a428",
@@ -85,6 +92,7 @@ func applyFairPlayBinaryProfile(support FairPlayBuildSupport, known bool, profil
 	}
 	support.Profile = profile.StructuralFamily
 	support.Status = "portable-structure-matched"
+	support.ValidationBasis = "structural-profile-plus-end-to-end-promotion-gate"
 	return support
 }
 
