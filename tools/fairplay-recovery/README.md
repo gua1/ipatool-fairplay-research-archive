@@ -69,6 +69,13 @@ state. If that path cannot derive a candidate, recovery retries with every
 captured license, shared-state, and ADI file. The most-specific matching path
 wins, so adding future variants cannot shadow an existing exact mapping.
 
+The companion `tools/fairplay-profile` command scans the arm64e `__text`
+section for normalized enrollment anchors. It reports exact and structural
+matches plus their rebased addresses. This profile is stored with new capture
+manifests and shown by `fairplay-doctor`, but it is deliberately non-gating:
+only successful model construction and matching-IPA validation can promote a
+recovery result.
+
 ## Normal workflow
 
 Run the public commands from the ipatool source tree:

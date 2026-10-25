@@ -101,6 +101,17 @@ publishes no model unless the complete SINF and matching IPA pass validation.
 It first uses the smallest proven license/state set, then retries with all
 captured SINF/SUPF, shared-state, and ADI variants when that contract fails.
 
+`fairplay-enroll collect` also records a normalized ARM64 structural profile.
+The profiler ignores registers, immediates, and branch destinations when
+matching the protected enrollment anchors, so rebased or re-randomized builds
+can be recognized without a hash entry. Structural matches are evidence only;
+they never bypass the SINF and IPA promotion gate. A standalone inspection is
+available from the source tree:
+
+```shell
+go run ./tools/fairplay-profile --binary /path/to/fairplayd
+```
+
 The experimental `fairplay-decrypt` command currently runs only on macOS and
 Linux because it enforces Unix private-file permissions. The standalone Go
 recovery helper can be cross-compiled for Windows, but the final ipatool

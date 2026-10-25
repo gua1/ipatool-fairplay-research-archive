@@ -93,6 +93,11 @@ func TestUnknownFairPlayBuildUsesPortableValidation(t *testing.T) {
 	if known || invalid.Recovery || invalid.Status != "invalid-fairplayd-identity" {
 		t.Fatalf("invalid build support = %#v, known=%v", invalid, known)
 	}
+	profile := &FairPlayBinaryProfile{StructuralFamily: "family-v1", PortableCandidate: true}
+	matched := applyFairPlayBinaryProfile(support, false, profile)
+	if matched.Profile != "family-v1" || matched.Status != "portable-structure-matched" || !matched.Recovery || matched.Decrypt {
+		t.Fatalf("structurally matched support = %#v", matched)
+	}
 }
 
 func TestCompatibilityModelMatchesCaptureBuild(t *testing.T) {

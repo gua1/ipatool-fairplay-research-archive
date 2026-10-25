@@ -55,23 +55,25 @@ type FairPlayDoctorReport struct {
 }
 
 type EnrollmentCaptureDiagnostic struct {
-	ProductVersion  string               `json:"product_version"`
-	BuildVersion    string               `json:"build_version"`
-	FairPlaydSHA256 string               `json:"fairplayd_sha256"`
-	FairPlaySupport FairPlayBuildSupport `json:"fairplay_support"`
-	SelectorID      string               `json:"selector_id"`
-	Files           int                  `json:"files"`
-	HasIPA          bool                 `json:"has_ipa"`
+	ProductVersion  string                 `json:"product_version"`
+	BuildVersion    string                 `json:"build_version"`
+	FairPlaydSHA256 string                 `json:"fairplayd_sha256"`
+	FairPlaySupport FairPlayBuildSupport   `json:"fairplay_support"`
+	BinaryProfile   *FairPlayBinaryProfile `json:"fairplay_binary_profile,omitempty"`
+	SelectorID      string                 `json:"selector_id"`
+	Files           int                    `json:"files"`
+	HasIPA          bool                   `json:"has_ipa"`
 }
 
 type FairPlayHostDiagnostic struct {
-	ProductVersion     string               `json:"product_version"`
-	BuildVersion       string               `json:"build_version"`
-	FairPlaydSHA256    string               `json:"fairplayd_sha256"`
-	FairPlaySupport    FairPlayBuildSupport `json:"fairplay_support"`
-	StateAccessible    bool                 `json:"state_accessible"`
-	StateFiles         int                  `json:"state_files"`
-	HardwareMACPresent bool                 `json:"hardware_iomac_present"`
+	ProductVersion     string                 `json:"product_version"`
+	BuildVersion       string                 `json:"build_version"`
+	FairPlaydSHA256    string                 `json:"fairplayd_sha256"`
+	FairPlaySupport    FairPlayBuildSupport   `json:"fairplay_support"`
+	BinaryProfile      *FairPlayBinaryProfile `json:"fairplay_binary_profile,omitempty"`
+	StateAccessible    bool                   `json:"state_accessible"`
+	StateFiles         int                    `json:"state_files"`
+	HardwareMACPresent bool                   `json:"hardware_iomac_present"`
 }
 
 func InspectLocalFairPlayHost() (FairPlayHostDiagnostic, error) {
@@ -92,7 +94,12 @@ func InspectLocalFairPlayHost() (FairPlayHostDiagnostic, error) {
 	if err != nil {
 		return result, err
 	}
-	result.FairPlaySupport, _ = ResolveFairPlayBuildSupport(result.FairPlaydSHA256, result.BuildVersion)
+	support, known := ResolveFairPlayBuildSupport(result.FairPlaydSHA256, result.BuildVersion)
+	result.FairPlaySupport = support
+	if profile, profileErr := InspectFairPlayBinaryProfile("/System/Library/PrivateFrameworks/CoreFP.framework/Versions/A/fairplayd"); profileErr == nil {
+		result.BinaryProfile = &profile
+		result.FairPlaySupport = applyFairPlayBinaryProfile(result.FairPlaySupport, known, result.BinaryProfile)
+	}
 	entries, stateErr := os.ReadDir("/private/var/db/fpsd/SC Info")
 	if stateErr == nil {
 		result.StateAccessible = true
@@ -334,6 +341,9 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			report.Checks["supported_fairplayd"] = host.FairPlaySupport.Decrypt
 			report.Checks["portable_recovery_available"] = host.FairPlaySupport.Recovery
 			report.Checks["verified_fairplayd"] = host.FairPlaySupport.Decrypt
+			if host.BinaryProfile != nil {
+				report.Checks["portable_structure_match"] = host.BinaryProfile.PortableCandidate
+			}
 			if host.FairPlaySupport.Recovery && !host.FairPlaySupport.Decrypt {
 				report.Checks["portable_recovery_candidate"] = true
 				report.Warnings = append(report.Warnings,
@@ -356,6 +366,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 				BuildVersion:    capture.BuildVersion,
 				FairPlaydSHA256: capture.FairPlayd.SHA256,
 				FairPlaySupport: capture.FairPlay,
+				BinaryProfile:   capture.BinaryProfile,
 				SelectorID:      capture.App.SelectorID,
 				Files:           len(capture.Files),
 				HasIPA:          capture.IPA != nil,
@@ -365,6 +376,9 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			report.Checks["supported_fairplayd"] = capture.FairPlay.Decrypt
 			report.Checks["portable_recovery_available"] = capture.FairPlay.Recovery
 			report.Checks["verified_fairplayd"] = capture.FairPlay.Decrypt
+			if capture.BinaryProfile != nil {
+				report.Checks["portable_structure_match"] = capture.BinaryProfile.PortableCandidate
+			}
 			if capture.FairPlay.Recovery && !capture.FairPlay.Decrypt {
 				report.Checks["portable_recovery_candidate"] = true
 				report.Warnings = append(report.Warnings,

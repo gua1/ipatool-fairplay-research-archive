@@ -79,6 +79,15 @@ func ResolveFairPlayBuildSupport(hash, build string) (FairPlayBuildSupport, bool
 	}, false
 }
 
+func applyFairPlayBinaryProfile(support FairPlayBuildSupport, known bool, profile *FairPlayBinaryProfile) FairPlayBuildSupport {
+	if known || profile == nil || !profile.PortableCandidate {
+		return support
+	}
+	support.Profile = profile.StructuralFamily
+	support.Status = "portable-structure-matched"
+	return support
+}
+
 type EnrollmentCaptureFile struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
@@ -104,6 +113,7 @@ type EnrollmentCaptureManifest struct {
 	BuildVersion   string                  `json:"build_version"`
 	FairPlayd      EnrollmentCaptureFile   `json:"fairplayd"`
 	FairPlay       FairPlayBuildSupport    `json:"fairplay_support"`
+	BinaryProfile  *FairPlayBinaryProfile  `json:"fairplay_binary_profile,omitempty"`
 	HardwareMAC    EnrollmentCaptureFile   `json:"hardware_iomac"`
 	App            EnrollmentCaptureApp    `json:"app"`
 	IPA            *EnrollmentCaptureFile  `json:"ipa,omitempty"`
@@ -585,13 +595,20 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 	}
 
 	var files []EnrollmentCaptureFile
-	fairplayd, err := thinArm64eMachO(options.FairPlaydPath, filepath.Join(options.OutputPath, "fairplayd", "fairplayd.arm64e"))
+	fairplaydPath := filepath.Join(options.OutputPath, "fairplayd", "fairplayd.arm64e")
+	fairplayd, err := thinArm64eMachO(options.FairPlaydPath, fairplaydPath)
 	if err != nil {
 		return manifest, err
+	}
+	var binaryProfile *FairPlayBinaryProfile
+	profile, profileErr := InspectFairPlayBinaryProfile(fairplaydPath)
+	if profileErr == nil {
+		binaryProfile = &profile
 	}
 	fairplayd = relativeCaptureFile(options.OutputPath, fairplayd)
 	files = append(files, fairplayd)
 	support, known := ResolveFairPlayBuildSupport(fairplayd.SHA256, options.BuildVersion)
+	support = applyFairPlayBinaryProfile(support, known, binaryProfile)
 
 	var mac []byte
 	if options.MACAddressPath != "" {
@@ -683,7 +700,7 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 	manifest = EnrollmentCaptureManifest{
 		Schema: EnrollmentCaptureSchema, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		ProductVersion: options.ProductVersion, BuildVersion: options.BuildVersion,
-		FairPlayd: fairplayd, FairPlay: support, HardwareMAC: hardware,
+		FairPlayd: fairplayd, FairPlay: support, BinaryProfile: binaryProfile, HardwareMAC: hardware,
 		App: EnrollmentCaptureApp{
 			BundleIdentifier: metadata.BundleIdentifier, Executable: metadata.Executable,
 			ExecutablePath: filepath.Join(app, metadata.Executable),
@@ -700,6 +717,9 @@ func CollectEnrollment(options EnrollmentCollectOptions) (EnrollmentCaptureManif
 	if !known {
 		manifest.Warnings = append(manifest.Warnings,
 			"fairplayd hash is not independently verified; portable recovery requires complete SINF and IPA validation")
+	}
+	if profileErr != nil {
+		manifest.Warnings = append(manifest.Warnings, "fairplayd structural profiling failed: "+profileErr.Error())
 	}
 	if err := writePrivateJSON(filepath.Join(options.OutputPath, "manifest.json"), manifest); err != nil {
 		return EnrollmentCaptureManifest{}, err
@@ -750,7 +770,16 @@ func LoadEnrollmentCapture(path string, verify bool) (EnrollmentCaptureManifest,
 	if manifest.Schema != EnrollmentCaptureSchema {
 		return manifest, fmt.Errorf("unsupported enrollment capture schema %q", manifest.Schema)
 	}
-	manifest.FairPlay, _ = ResolveFairPlayBuildSupport(manifest.FairPlayd.SHA256, manifest.BuildVersion)
+	support, known := ResolveFairPlayBuildSupport(manifest.FairPlayd.SHA256, manifest.BuildVersion)
+	manifest.FairPlay = support
+	if manifest.BinaryProfile == nil {
+		if full, pathErr := captureFilePath(path, manifest.FairPlayd.Path); pathErr == nil {
+			if profile, profileErr := InspectFairPlayBinaryProfile(full); profileErr == nil {
+				manifest.BinaryProfile = &profile
+			}
+		}
+	}
+	manifest.FairPlay = applyFairPlayBinaryProfile(manifest.FairPlay, known, manifest.BinaryProfile)
 	if !verify {
 		return manifest, nil
 	}
