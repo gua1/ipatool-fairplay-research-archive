@@ -160,6 +160,7 @@ def generate_source(
     blocks: list[int],
     sizes: dict[int, int],
     stop_pc: int,
+    stop_hit: int = 1,
 ) -> str:
     disassembler = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     disassembler.detail = True
@@ -174,8 +175,9 @@ def generate_source(
         "",
         "func runRawSourceBootstrapCFG(s *state, runtime *rawSourceRuntime, maxBlocks int) (uint64, int, error) {",
         f"\tpc := uint64({START:#x})",
+        "\tstopHits := 0",
         "\tfor blockCount := 0; blockCount < maxBlocks; blockCount++ {",
-        f"\t\tif pc == {stop_pc:#x} {{ return pc, blockCount, nil }}",
+        f"\t\tif pc == {stop_pc:#x} {{ stopHits++; if stopHits == {stop_hit} {{ return pc, blockCount, nil }} }}",
         "\t\tif runtime != nil && runtime.stopPC != 0 && pc == runtime.stopPC { return pc, blockCount, nil }",
         f"\t\tif pc >= {EXTERNAL_BASE:#x} || pc == {NOOP_CALLBACK:#x} {{",
         "\t\t\tif runtime == nil { return pc, blockCount, fmt.Errorf(\"bootstrap runtime is unavailable\") }",
@@ -220,6 +222,10 @@ def generate_source(
         )
         terminated = False
         for ordinal, instruction in enumerate(instructions):
+            if stop_hit == 1 and instruction.address == stop_pc:
+                lines.append(f"\treturn {stop_pc:#x}, true, nil")
+                terminated = True
+                break
             lines.append(
                 f"\tif runtime != nil && runtime.stopPC == {instruction.address:#x} {{ return {instruction.address:#x}, true, nil }}"
             )

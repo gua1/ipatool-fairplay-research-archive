@@ -788,6 +788,10 @@ func countLeadingZeros(value uint64, width int) uint64 {
 	return uint64(bits.LeadingZeros64(value))
 }
 
+func reverseBytes32(value uint64) uint64 { return uint64(bits.ReverseBytes32(uint32(value))) }
+
+func reverseBytes64(value uint64) uint64 { return bits.ReverseBytes64(value) }
+
 func (s *state) test32(value uint32) {
 	s.n, s.z, s.c, s.v = value&0x80000000 != 0, value == 0, false, false
 }

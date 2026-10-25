@@ -658,11 +658,12 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         destination = reg_name(disassembler, operands[0])
         source = operand_expression(disassembler, operands[1], 32)
         output.append(write_register(destination, f"signExtend32(uint32({source}))"))
-    elif mnemonic == "sxtb":
+    elif mnemonic in {"sxtb", "sxth"}:
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
         source = operand_expression(disassembler, operands[1], width)
-        output.append(write_register(destination, f"signExtendBits({source}, 8, {width})"))
+        bits = 8 if mnemonic == "sxtb" else 16
+        output.append(write_register(destination, f"signExtendBits({source}, {bits}, {width})"))
     elif mnemonic == "neg":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"-({operand_expression(disassembler, operands[1], reg_width(destination))})"))
@@ -880,6 +881,23 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 f"shiftLeft(signExtendBits({source}, {bits}, {width}), {lsb}, {width})",
             )
         )
+    elif mnemonic == "sbfx":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        lsb, bits = int(operands[2].imm), int(operands[3].imm)
+        output.append(
+            write_register(
+                destination,
+                f"signExtendBits(({source}) >> {lsb}, {bits}, {width})",
+            )
+        )
+    elif mnemonic == "rev":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        helper = "reverseBytes32" if width == 32 else "reverseBytes64"
+        output.append(write_register(destination, f"{helper}({source})"))
     elif mnemonic == "adrp":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"{int(operands[1].imm):#x}"))

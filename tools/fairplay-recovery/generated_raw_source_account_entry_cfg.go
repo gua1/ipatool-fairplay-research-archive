@@ -7,9 +7,13 @@ import "fmt"
 
 func runRawSourceAccountEntryCFG(s *state, runtime *rawSourceRuntime, maxBlocks int) (uint64, int, error) {
 	pc := uint64(0x100cd1c18)
+	stopHits := 0
 	for blockCount := 0; blockCount < maxBlocks; blockCount++ {
 		if pc == 0x10057ae74 {
-			return pc, blockCount, nil
+			stopHits++
+			if stopHits == 1 {
+				return pc, blockCount, nil
+			}
 		}
 		if runtime != nil && runtime.stopPC != 0 && pc == runtime.stopPC {
 			return pc, blockCount, nil
