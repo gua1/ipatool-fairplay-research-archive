@@ -101,6 +101,14 @@ publishes no model unless the complete SINF and matching IPA pass validation.
 It first uses the smallest proven license/state set, then retries with all
 captured SINF/SUPF, shared-state, and ADI variants when that contract fails.
 
+Before executing the evaluator, recovery normalizes the capture into the
+versioned `macos-current-sinf-v1` contract. It validates the installed and
+target SINF selectors, parses every SUPF architecture/page table, classifies
+the SIDB envelope, verifies the six-byte hardware identity, and fingerprints
+the resulting metadata deterministically. The private recovery directory keeps
+this evidence as `canonical-input.json`; it contains hashes and geometry, not
+raw SIDB, hardware, or key bytes.
+
 `fairplay-enroll collect` also records a normalized ARM64 structural profile.
 The profiler ignores registers, immediates, and branch destinations when
 matching the protected enrollment anchors. It combines Mach-O function starts

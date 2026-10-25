@@ -69,6 +69,13 @@ state. If that path cannot derive a candidate, recovery retries with every
 captured license, shared-state, and ADI file. The most-specific matching path
 wins, so adding future variants cannot shadow an existing exact mapping.
 
+Recovery first constructs `ipatool-fairplay-canonical-enrollment-v1`. This
+normalizes SINF selectors/layout, SUPF variants and architectures, SIDB
+version/geometry, executable identity, hardware identity, and auxiliary state
+without retaining their raw bytes in the report. The canonical fingerprint is
+the compatibility contract supplied to the evaluator and is recorded beside
+the recovery result.
+
 The companion `tools/fairplay-profile` command scans the arm64e `__text`
 section for normalized enrollment anchors. It scores ordinary Mach-O function
 starts and protected handler roots recovered from authenticated dyld fixups,

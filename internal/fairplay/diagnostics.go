@@ -48,6 +48,7 @@ type FairPlayDoctorReport struct {
 	SINF            []SINFDiagnostic             `json:"sinf,omitempty"`
 	Models          []EnrollmentModelDiagnostic  `json:"models,omitempty"`
 	CompatibleModel string                       `json:"compatible_model,omitempty"`
+	CanonicalInput  *CanonicalEnrollmentInput    `json:"canonical_input,omitempty"`
 	Checks          map[string]bool              `json:"checks"`
 	Errors          []string                     `json:"errors,omitempty"`
 	Warnings        []string                     `json:"warnings,omitempty"`
@@ -379,6 +380,13 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 			if capture.BinaryProfile != nil {
 				report.Checks["portable_structure_match"] = capture.BinaryProfile.PortableCandidate
 			}
+			canonical, normalizeErr := NormalizeEnrollmentCapture(capturePath, capture)
+			if normalizeErr != nil {
+				report.Errors = append(report.Errors, "canonical input: "+normalizeErr.Error())
+			} else {
+				report.CanonicalInput = &canonical
+				report.Checks["canonical_enrollment_input"] = canonical.RecoveryReady
+			}
 			if capture.FairPlay.Recovery && !capture.FairPlay.Decrypt {
 				report.Checks["portable_recovery_candidate"] = true
 				report.Warnings = append(report.Warnings,
@@ -470,7 +478,7 @@ func DoctorFairPlay(capturePath, ipaPath, modelPath string) FairPlayDoctorReport
 	}
 	if len(report.SINF) != 0 || captureManifest != nil || modelPath != "" {
 		report.Ready = len(report.Errors) == 0 && report.Checks["current_sinf_layout"] &&
-			(captureManifest == nil || report.Checks["capture_integrity"] && report.Checks["portable_recovery_available"] && report.Checks["capture_selector_match"]) &&
+			(captureManifest == nil || report.Checks["capture_integrity"] && report.Checks["portable_recovery_available"] && report.Checks["capture_selector_match"] && report.Checks["canonical_enrollment_input"]) &&
 			(modelPath == "" || report.Checks["sinf_model_validation"])
 	} else if report.Host != nil {
 		report.Ready = report.Checks["portable_recovery_available"] && report.Checks["native_state_accessible"] && report.Checks["hardware_iomac"]

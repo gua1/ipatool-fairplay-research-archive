@@ -218,7 +218,22 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 	if manifest.IPA == nil {
 		return errors.New("enrollment capture has no matching IPA")
 	}
+	canonicalInput, err := fairplay.NormalizeEnrollmentCapture(options.Capture, manifest)
+	if err != nil {
+		return fmt.Errorf("normalize enrollment capture: %w", err)
+	}
+	if !canonicalInput.RecoveryReady {
+		return errors.New("canonical enrollment input is not recovery-ready")
+	}
 	if err := os.Mkdir(options.Output, 0o700); err != nil {
+		return err
+	}
+	canonicalDocument, err := fairplay.MarshalCanonicalEnrollmentInput(canonicalInput)
+	if err != nil {
+		return err
+	}
+	canonicalDocument = append(canonicalDocument, '\n')
+	if err := privateRecoveryFile(filepath.Join(options.Output, "canonical-input.json"), canonicalDocument); err != nil {
 		return err
 	}
 	root, err := resolveRecoverySourceRoot()
@@ -314,6 +329,7 @@ func runGoFairplayEnrollmentRecovery(ctx context.Context, options fairplayRecove
 		"schema": "ipatool-fairplay-enrollment-recovery-v2", "success": true,
 		"selector": manifest.App.SelectorID, "fairplayd_sha256": manifest.FairPlayd.SHA256,
 		"fairplayd_status": manifest.FairPlay.Status, "fairplayd_independently_verified": manifest.FairPlay.Decrypt,
+		"canonical_contract": canonicalInput.Contract, "canonical_input_sha256": canonicalInput.FingerprintSHA256,
 		"enrollment_model": enrollment, "decrypted_ipa": decrypted,
 		"decrypted_ipa_sha256": result.OutputSHA256, "encrypted_images": result.EncryptedImages,
 		"decrypted_pages": result.DecryptedPages, "all_cryptids_zero": true,
