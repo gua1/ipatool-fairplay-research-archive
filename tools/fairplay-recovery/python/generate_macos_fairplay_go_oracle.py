@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import pickle
+import re
 import struct
 
 from capstone import CS_ARCH_ARM64, CS_MODE_ARM, Cs
@@ -22,11 +23,17 @@ from capstone.arm64 import (
     ARM64_CC_EQ,
     ARM64_CC_GT,
     ARM64_CC_GE,
+    ARM64_CC_HS,
     ARM64_CC_HI,
     ARM64_CC_LE,
     ARM64_CC_LO,
+    ARM64_CC_LS,
     ARM64_CC_LT,
+    ARM64_CC_MI,
     ARM64_CC_NE,
+    ARM64_CC_PL,
+    ARM64_CC_VC,
+    ARM64_CC_VS,
     ARM64_EXT_SXTB,
     ARM64_EXT_SXTH,
     ARM64_EXT_SXTW,
@@ -64,6 +71,7 @@ REPEAT_COUNT = 1
 MODEL_PAGE_SANITIZER = None
 MODEL_INITIAL_READ_BYTES: set[int] = set()
 EXTRA_MODEL_PAGES: set[int] = set()
+MODEL_ZERO_PAGES: set[int] = set()
 FUNCTION_NAME = "runGenerated"
 EMIT_PROFILE_PREAMBLE = True
 DEFAULT_BUILD_TAG = None
@@ -180,6 +188,192 @@ def write_register(name: str, expression: str) -> str:
     return f"s.x[{index}] = uint64({expression})"
 
 
+def vector_register_index(name: str) -> int:
+    match = re.fullmatch(r"[vqdshb](\d+)", name.lower())
+    if match is None or not 0 <= int(match.group(1)) < 32:
+        raise ValueError(f"unsupported vector register {name!r}")
+    return int(match.group(1))
+
+
+def split_operands(text: str) -> list[str]:
+    result: list[str] = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(text):
+        if character in "[{":
+            depth += 1
+        elif character in "]}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            result.append(text[start:index].strip())
+            start = index + 1
+    result.append(text[start:].strip())
+    return result
+
+
+def vector_shape(text: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v(\d+)\.(\d+)([bhsd])", text.lower())
+    if match is None:
+        raise ValueError(f"unsupported vector shape {text!r}")
+    return int(match.group(1)), int(match.group(2)), {"b": 8, "h": 16, "s": 32, "d": 64}[match.group(3)]
+
+
+def emit_vector_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str] | None:
+    mnemonic = instruction.mnemonic.lower()
+    operands = instruction.operands
+    parts = split_operands(instruction.op_str)
+    register_names = [
+        disassembler.reg_name(operand.reg).lower()
+        for operand in operands
+        if operand.type == ARM64_OP_REG
+    ]
+    has_vector = any(re.fullmatch(r"[vqds]\d+", name) for name in register_names)
+    if not has_vector:
+        return None
+
+    if mnemonic in {"ldr", "ldur"}:
+        destination = register_names[0]
+        size = {"q": 16, "d": 8, "s": 4}[destination[0]]
+        return [
+            f"if err := s.loadVector({vector_register_index(destination)}, {memory_address(disassembler, operands[1])}, {size}); err != nil {{ return err }}"
+        ]
+    if mnemonic in {"str", "stur"}:
+        source = register_names[0]
+        size = {"q": 16, "d": 8, "s": 4}[source[0]]
+        return [
+            f"if err := s.storeVector({vector_register_index(source)}, {memory_address(disassembler, operands[1])}, {size}); err != nil {{ return err }}"
+        ]
+    if mnemonic == "stp" and register_names[0].startswith("q"):
+        first, second = map(vector_register_index, register_names[:2])
+        address = memory_address(disassembler, operands[2])
+        return [
+            f"if err := s.storeVector({first}, {address}, 16); err != nil {{ return err }}",
+            f"if err := s.storeVector({second}, ({address}) + 16, 16); err != nil {{ return err }}",
+        ]
+    if mnemonic in {"add", "sub", "mul", "eor"} and parts[0].startswith("v"):
+        destination, lanes, bits = vector_shape(parts[0])
+        left, left_lanes, left_bits = vector_shape(parts[1])
+        right, right_lanes, right_bits = vector_shape(parts[2])
+        if (lanes, bits) != (left_lanes, left_bits) or (lanes, bits) != (right_lanes, right_bits):
+            raise ValueError(f"inconsistent vector shape at {instruction.address:#x}")
+        return [f's.vectorBinary("{mnemonic}", {destination}, {left}, {right}, {lanes}, {bits})']
+    if mnemonic == "dup":
+        destination, lanes, bits = vector_shape(parts[0])
+        source = reg_name(disassembler, operands[1])
+        return [f"s.vectorDup({destination}, {lanes}, {bits}, {read_register(source)})"]
+    if mnemonic == "movi":
+        destination, lanes, bits = vector_shape(parts[0])
+        value = int(operands[1].imm)
+        shift = int(operands[1].shift.value)
+        return [f"s.vectorDup({destination}, {lanes}, {bits}, uint64({value:#x}) << {shift})"]
+    if mnemonic in {"mla", "mls"}:
+        destination, lanes, bits = vector_shape(parts[0])
+        left, _, _ = vector_shape(parts[1])
+        right, _, _ = vector_shape(parts[2])
+        return [
+            f"s.vectorMultiplyAccumulate({destination}, {left}, {right}, {lanes}, {bits}, {str(mnemonic == 'mls').lower()})"
+        ]
+    if mnemonic in {"umull", "umull2"} and parts[0].startswith("v"):
+        destination, lanes, output_bits = vector_shape(parts[0])
+        left, _, input_bits = vector_shape(parts[1])
+        right, _, right_bits = vector_shape(parts[2])
+        if output_bits != input_bits * 2 or right_bits != input_bits:
+            raise ValueError(f"invalid vector multiply-long shape at {instruction.address:#x}")
+        return [
+            f"s.vectorUnsignedMultiplyLong({destination}, {left}, {right}, {lanes}, {input_bits}, {str(mnemonic == 'umull2').lower()})"
+        ]
+    if mnemonic in {"ushll", "ushll2"}:
+        destination, lanes, output_bits = vector_shape(parts[0])
+        source, _, input_bits = vector_shape(parts[1])
+        amount = int(operands[2].imm)
+        if output_bits != input_bits * 2:
+            raise ValueError(f"invalid vector shift-long shape at {instruction.address:#x}")
+        return [
+            f"s.vectorUnsignedShiftLong({destination}, {source}, {lanes}, {input_bits}, {amount}, {str(mnemonic == 'ushll2').lower()})"
+        ]
+    if mnemonic == "shrn":
+        destination, lanes, output_bits = vector_shape(parts[0])
+        source, _, input_bits = vector_shape(parts[1])
+        amount = int(operands[2].imm)
+        if input_bits != output_bits * 2:
+            raise ValueError(f"invalid vector narrow shape at {instruction.address:#x}")
+        return [f"s.vectorShiftRightNarrow({destination}, {source}, {lanes}, {output_bits}, {amount})"]
+    if mnemonic == "ushr":
+        destination, lanes, bits = vector_shape(parts[0])
+        source, _, _ = vector_shape(parts[1])
+        amount = int(operands[2].imm)
+        return [f"s.vectorUnsignedShiftRight({destination}, {source}, {lanes}, {bits}, {amount})"]
+    if mnemonic == "ushl":
+        destination, lanes, bits = vector_shape(parts[0])
+        source, _, _ = vector_shape(parts[1])
+        shifts, _, _ = vector_shape(parts[2])
+        return [f"s.vectorUnsignedShift({destination}, {source}, {shifts}, {lanes}, {bits})"]
+    if mnemonic == "xtn":
+        destination, lanes, output_bits = vector_shape(parts[0])
+        source, _, input_bits = vector_shape(parts[1])
+        if input_bits != output_bits * 2:
+            raise ValueError(f"invalid vector extract-narrow shape at {instruction.address:#x}")
+        return [f"s.vectorExtractNarrow({destination}, {source}, {lanes}, {output_bits})"]
+    if mnemonic == "uzp1":
+        destination, lanes, bits = vector_shape(parts[0])
+        left, _, _ = vector_shape(parts[1])
+        right, _, _ = vector_shape(parts[2])
+        return [f"s.vectorUnzipEven({destination}, {left}, {right}, {lanes}, {bits})"]
+    if mnemonic == "eor3":
+        destination, _, _ = vector_shape(parts[0])
+        first, _, _ = vector_shape(parts[1])
+        second, _, _ = vector_shape(parts[2])
+        third, _, _ = vector_shape(parts[3])
+        return [f"s.vectorEor3({destination}, {first}, {second}, {third})"]
+    if mnemonic == "tbl":
+        destination, _, _ = vector_shape(parts[0])
+        table_registers = [int(value) for value in re.findall(r"v(\d+)\.16b", parts[1])]
+        indexes, _, _ = vector_shape(parts[2])
+        return [f"s.vectorTable({destination}, []int{{{','.join(map(str, table_registers))}}}, {indexes})"]
+    if mnemonic == "fneg":
+        destination = vector_register_index(parts[0])
+        source = vector_register_index(parts[1])
+        return [
+            f"vectorValue{ordinal} := s.vectorLane({source}, 0, 64)",
+            f"s.clearVector({destination})",
+            f"s.setVectorLane({destination}, 0, 64, vectorValue{ordinal} ^ (uint64(1) << 63))",
+        ]
+    if mnemonic == "fmov" and parts[0].startswith("d"):
+        destination = vector_register_index(parts[0])
+        source = vector_register_index(parts[1])
+        return [
+            f"vectorValue{ordinal} := s.vectorLane({source}, 0, 64)",
+            f"s.clearVector({destination})",
+            f"s.setVectorLane({destination}, 0, 64, vectorValue{ordinal})",
+        ]
+    if mnemonic == "fmov" and parts[0].startswith("w"):
+        destination = reg_name(disassembler, operands[0])
+        source = vector_register_index(parts[1])
+        return [write_register(destination, f"s.vectorLane({source}, 0, 32)")]
+    if mnemonic == "mov" and parts[0].startswith("v"):
+        if ".s[" in parts[0]:
+            match = re.fullmatch(r"v(\d+)\.s\[(\d+)\]", parts[0])
+            if match is None:
+                raise ValueError(f"unsupported vector lane move {instruction.op_str}")
+            return [
+                f"s.setVectorLane({int(match.group(1))}, {int(match.group(2))}, 32, {read_register(reg_name(disassembler, operands[1]))})"
+            ]
+        destination, _, _ = vector_shape(parts[0])
+        source, _, _ = vector_shape(parts[1])
+        return [f"s.vectors[{destination}] = s.vectors[{source}]"]
+    if mnemonic == "mov" and parts[1].startswith("v"):
+        match = re.fullmatch(r"v(\d+)\.s\[(\d+)\]", parts[1])
+        if match is None:
+            raise ValueError(f"unsupported vector lane move {instruction.op_str}")
+        return [
+            write_register(
+                reg_name(disassembler, operands[0]),
+                f"s.vectorLane({int(match.group(1))}, {int(match.group(2))}, 32)",
+            )
+        ]
+    raise ValueError(f"unsupported vector instruction {instruction.address:#x}: {mnemonic} {instruction.op_str}")
+
+
 def shifted(expression: str, shift_type: int, amount: int, width: int) -> str:
     if shift_type == 0 or amount == 0:
         return expression
@@ -245,12 +439,18 @@ def condition_name(code: int) -> str:
     return {
         ARM64_CC_EQ: "eq",
         ARM64_CC_NE: "ne",
+        ARM64_CC_HS: "hs",
         ARM64_CC_LO: "lo",
         ARM64_CC_HI: "hi",
+        ARM64_CC_LS: "ls",
         ARM64_CC_LT: "lt",
         ARM64_CC_LE: "le",
         ARM64_CC_GT: "gt",
         ARM64_CC_GE: "ge",
+        ARM64_CC_MI: "mi",
+        ARM64_CC_PL: "pl",
+        ARM64_CC_VS: "vs",
+        ARM64_CC_VC: "vc",
     }[code]
 
 
@@ -289,7 +489,10 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         right = operand_expression(disassembler, operands[2], width)
         return write_register(destination, f"({left} {operator} {right})")
 
-    if mnemonic in {"add", "sub", "eor", "and", "orr"}:
+    vector_output = emit_vector_instruction(disassembler, instruction, ordinal)
+    if vector_output is not None:
+        output.extend(vector_output)
+    elif mnemonic in {"add", "sub", "eor", "and", "orr"}:
         output.append(binary_expression({"add": "+", "sub": "-", "eor": "^", "and": "&", "orr": "|"}[mnemonic]))
     elif mnemonic == "adds":
         destination = reg_name(disassembler, operands[0])
@@ -303,6 +506,23 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"({left} + {right} + boolValue(s.c))"))
+    elif mnemonic == "subs":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        output.append(
+            write_register(
+                destination,
+                f"s.subtractWithFlags({left}, {right}, {width})",
+            )
+        )
+    elif mnemonic == "eon":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        output.append(write_register(destination, f"({left} ^ ^({right}))"))
     elif mnemonic in {"bic", "orn"}:
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
@@ -320,14 +540,32 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         shift = operands[1].shift.value
         value = int(operands[1].imm) & 0xFFFF
         output.append(write_register(destination, f"insertBits({read_register(destination)}, {value:#x}, {shift}, 16, {width})"))
-    elif mnemonic in {"ldr", "ldur", "ldrb", "ldurb"}:
+    elif mnemonic in {"ldr", "ldur", "ldrb", "ldurb", "ldrh", "ldurh"}:
         destination = reg_name(disassembler, operands[0])
-        size = 1 if mnemonic in {"ldrb", "ldurb"} else 8 if reg_width(destination) == 64 else 4
+        size = (
+            1
+            if mnemonic in {"ldrb", "ldurb"}
+            else 2
+            if mnemonic in {"ldrh", "ldurh"}
+            else 8
+            if reg_width(destination) == 64
+            else 4
+        )
         output.extend(
             [
                 f"value{ordinal}, err := s.load({memory_address(disassembler, operands[1])}, {size})",
                 "if err != nil { return err }",
                 write_register(destination, f"value{ordinal}"),
+            ]
+        )
+        append_writeback(1)
+    elif mnemonic in {"ldrsw", "ldursw"}:
+        destination = reg_name(disassembler, operands[0])
+        output.extend(
+            [
+                f"value{ordinal}, err := s.load({memory_address(disassembler, operands[1])}, 4)",
+                "if err != nil { return err }",
+                write_register(destination, f"signExtend32(uint32(value{ordinal}))"),
             ]
         )
         append_writeback(1)
@@ -359,15 +597,39 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
             ]
         )
         append_writeback(2)
-    elif mnemonic in {"str", "stur", "strb"}:
+    elif mnemonic in {"str", "stur", "strb", "strh", "sturh"}:
         source = reg_name(disassembler, operands[0])
-        size = 1 if mnemonic == "strb" else 8 if reg_width(source) == 64 else 4
+        size = (
+            1
+            if mnemonic == "strb"
+            else 2
+            if mnemonic in {"strh", "sturh"}
+            else 8
+            if reg_width(source) == 64
+            else 4
+        )
         output.extend(
             [
                 f"if err := s.storeValue({memory_address(disassembler, operands[1])}, {read_register(source)}, {size}); err != nil {{ return err }}",
             ]
         )
         append_writeback(1)
+    elif mnemonic == "casal":
+        expected = reg_name(disassembler, operands[0])
+        replacement = reg_name(disassembler, operands[1])
+        size = 8 if reg_width(expected) == 64 else 4
+        address = memory_address(disassembler, operands[2])
+        cast = "uint64" if size == 8 else "uint32"
+        output.extend(
+            [
+                f"value{ordinal}, err := s.load({address}, {size})",
+                "if err != nil { return err }",
+                f"if {cast}(value{ordinal}) == {cast}({read_register(expected)}) {{",
+                f"\tif err := s.storeValue({address}, {read_register(replacement)}, {size}); err != nil {{ return err }}",
+                "}",
+                write_register(expected, f"value{ordinal}"),
+            ]
+        )
     elif mnemonic in {"lsl", "lsr", "ror"}:
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
@@ -375,12 +637,33 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         amount = operand_expression(disassembler, operands[2], width)
         helper = {"lsl": "shiftLeft", "lsr": "shiftRight", "ror": "rotateRight"}[mnemonic]
         output.append(write_register(destination, f"{helper}({left}, int({amount}), {width})"))
+    elif mnemonic == "asr":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        amount = operand_expression(disassembler, operands[2], width)
+        output.append(write_register(destination, f"shiftRightArithmetic({left}, int({amount}), {width})"))
+    elif mnemonic == "sxtw":
+        destination = reg_name(disassembler, operands[0])
+        source = operand_expression(disassembler, operands[1], 32)
+        output.append(write_register(destination, f"signExtend32(uint32({source}))"))
+    elif mnemonic == "sxtb":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        output.append(write_register(destination, f"signExtendBits({source}, 8, {width})"))
     elif mnemonic == "neg":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"-({operand_expression(disassembler, operands[1], reg_width(destination))})"))
     elif mnemonic == "mvn":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"^({operand_expression(disassembler, operands[1], reg_width(destination))})"))
+    elif mnemonic == "mneg":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        output.append(write_register(destination, f"-({left} * {right})"))
     elif mnemonic == "mul":
         output.append(binary_expression("*"))
     elif mnemonic == "madd":
@@ -470,6 +753,20 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
                 "}",
             ]
         )
+    elif mnemonic == "ccmn":
+        width = reg_width(reg_name(disassembler, operands[0]))
+        left = operand_expression(disassembler, operands[0], width)
+        right = operand_expression(disassembler, operands[1], width)
+        immediate = int(operands[2].imm) & 0xF
+        output.extend(
+            [
+                f"if s.condition(\"{condition_name(instruction.cc)}\") {{",
+                f"\t_ = s.addWithCarry({left}, {right}, false, {width})",
+                "} else {",
+                f"\ts.setNZCV({immediate:#x})",
+                "}",
+            ]
+        )
     elif mnemonic == "cmn":
         width = reg_width(reg_name(disassembler, operands[0]))
         left = operand_expression(disassembler, operands[0], width)
@@ -488,6 +785,27 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         left = operand_expression(disassembler, operands[1], width)
         right = operand_expression(disassembler, operands[2], width)
         output.append(write_register(destination, f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), {left}, {right})"))
+    elif mnemonic == "csinc":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        output.append(
+            write_register(
+                destination,
+                f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), {left}, ({right} + 1))",
+            )
+        )
+    elif mnemonic == "cinc":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        output.append(
+            write_register(
+                destination,
+                f"selectValue(s.condition(\"{condition_name(instruction.cc)}\"), ({source} + 1), {source})",
+            )
+        )
     elif mnemonic == "cneg":
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
@@ -507,15 +825,40 @@ def emit_instruction(disassembler: Cs, instruction, ordinal: int) -> list[str]:
         output.append(f"result{ordinal} := uint32({left} &^ {right})")
         output.append(write_register(destination, f"result{ordinal}"))
         output.append(f"s.test32(result{ordinal})")
+    elif mnemonic == "ands":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        left = operand_expression(disassembler, operands[1], width)
+        right = operand_expression(disassembler, operands[2], width)
+        cast = "uint32" if width == 32 else "uint64"
+        output.append(f"result{ordinal} := {cast}({left} & {right})")
+        output.append(write_register(destination, f"result{ordinal}"))
+        if width == 32:
+            output.append(f"s.test32(result{ordinal})")
+        else:
+            output.append(f"s.test64(result{ordinal})")
     elif mnemonic == "ubfiz":
         destination = reg_name(disassembler, operands[0])
         width = reg_width(destination)
         source = operand_expression(disassembler, operands[1], width)
         lsb, bits = int(operands[2].imm), int(operands[3].imm)
         output.append(write_register(destination, f"(({source}) & bitMask({bits}, {width})) << {lsb}"))
+    elif mnemonic == "sbfiz":
+        destination = reg_name(disassembler, operands[0])
+        width = reg_width(destination)
+        source = operand_expression(disassembler, operands[1], width)
+        lsb, bits = int(operands[2].imm), int(operands[3].imm)
+        output.append(
+            write_register(
+                destination,
+                f"shiftLeft(signExtendBits({source}, {bits}, {width}), {lsb}, {width})",
+            )
+        )
     elif mnemonic == "adrp":
         destination = reg_name(disassembler, operands[0])
         output.append(write_register(destination, f"{int(operands[1].imm):#x}"))
+    elif mnemonic in {"pacibsp", "paciasp", "paciza"}:
+        pass
     elif mnemonic in {"braa", "brab"}:
         # The generated evaluator is already laid out in the one validated
         # runtime trace order, so authenticated control transfers are edges,
@@ -813,7 +1156,11 @@ def write_private_model(
             output.write(bytes((int(nzcv["n"]), int(nzcv["z"]), int(nzcv["c"]), int(nzcv["v"]))))
             output.write(struct.pack("<I", len(pages)))
             for address in pages:
-                data = checkpoint_pages.get(address)
+                data = (
+                    bytes(0x1000)
+                    if address in MODEL_ZERO_PAGES
+                    else checkpoint_pages.get(address)
+                )
                 if data is None:
                     data = page_from_image(database, address)
                 elif isinstance(data, dict):

@@ -11,6 +11,15 @@ import (
 	"runtime"
 )
 
+type stringList []string
+
+func (s *stringList) String() string { return fmt.Sprint([]string(*s)) }
+
+func (s *stringList) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func flattenEncoding(value dpEncoding) []byte {
 	result := make([]byte, 0, 16*256)
 	for _, table := range value {
@@ -64,18 +73,22 @@ func writePrivateJSON(path string, value any) (returnErr error) {
 }
 
 func main() {
+	var rawSourceFiles stringList
 	modelPath := flag.String("model", "", "private Go FairPlay oracle model")
 	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "parallel oracle workers")
 	recoveryOutput := flag.String("recover-output", "", "recover the AES model in-process and write private JSON")
 	evaluateInput := flag.String("evaluate-input", "", "private fixed-size evaluator input")
 	evaluateOutput := flag.String("evaluate-output", "", "new private evaluator output")
 	enrollmentFrame := flag.String("enrollment-frame", "", "private 16-byte enrollment frame for SIDB recovery")
-	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: bootstrap, writer, tail, even, odd, digest, cycle, outer-primary, or outer")
+	rawSourceKernel := flag.String("raw-source-kernel", "", "private 26A428 kernel to run: bootstrap, bootstrap-cfg, bootstrap-full, writer, tail, even, odd, digest, cycle, outer-primary, or outer")
 	rawSourceLoop := flag.Bool("raw-source-loop", false, "run one private 26A428 source-writer loop to its natural exit")
 	rawSourceIterations := flag.Int("raw-source-iterations", 0, "run exactly this many raw-source kernel iterations")
 	rawSourceReport := flag.String("raw-source-report", "", "new private JSON report for raw-source register/page state")
 	rawSourceOutput := flag.String("raw-source-output", "", "new private 192/224-byte +0x304 source output")
 	rawSourceBytes := flag.Int("raw-source-bytes", 0, "raw-source output size: 192 or 224")
+	rawSourceMAC := flag.String("raw-source-mac", "", "private six-byte hardware address for bootstrap CFG")
+	rawSourceStopPC := flag.Uint64("raw-source-stop-pc", 0, "research stop PC for bootstrap CFG")
+	flag.Var(&rawSourceFiles, "raw-source-file", "bootstrap CFG file mapping SUFFIX=FILE; repeat as needed")
 	flag.Parse()
 	var value *model
 	var err error
@@ -125,13 +138,17 @@ func main() {
 			fmt.Fprintln(os.Stderr, "--raw-source-output and --raw-source-bytes must be supplied together")
 			os.Exit(2)
 		}
-		if *rawSourceOutput != "" && (*rawSourceKernel != "outer" || !*rawSourceLoop) {
+		if *rawSourceOutput != "" && *rawSourceKernel != "bootstrap-full" && (*rawSourceKernel != "outer" || !*rawSourceLoop) {
 			fmt.Fprintln(os.Stderr, "raw source output requires the complete outer loop")
 			os.Exit(2)
 		}
 		if *rawSourceLoop && *rawSourceIterations != 0 {
 			fmt.Fprintln(os.Stderr, "choose either --raw-source-loop or --raw-source-iterations")
 			os.Exit(2)
+		}
+		if err := configureRawSourceRuntime(value, *rawSourceKernel, rawSourceFiles, *rawSourceMAC, *rawSourceStopPC); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
 		digest, iterations, err := runRawSource(value, *rawSourceKernel, *rawSourceLoop, *rawSourceIterations)
 		if err != nil {
@@ -163,7 +180,7 @@ func main() {
 		fmt.Printf("fairplay_raw_source=1 kernel=%s loop=%t iterations=%d state_sha256=%s\n", *rawSourceKernel, *rawSourceLoop, iterations, digest)
 		return
 	}
-	if *rawSourceLoop || *rawSourceIterations != 0 || *rawSourceReport != "" || *rawSourceOutput != "" || *rawSourceBytes != 0 {
+	if *rawSourceLoop || *rawSourceIterations != 0 || *rawSourceReport != "" || *rawSourceOutput != "" || *rawSourceBytes != 0 || *rawSourceMAC != "" || *rawSourceStopPC != 0 || len(rawSourceFiles) != 0 {
 		fmt.Fprintln(os.Stderr, "raw source iteration options require --raw-source-kernel")
 		os.Exit(2)
 	}

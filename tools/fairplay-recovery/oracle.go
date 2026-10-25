@@ -118,7 +118,7 @@ func loadModelReader(input io.Reader) (*model, error) {
 	}
 	result.n, result.z, result.c, result.v = flags[0] != 0, flags[1] != 0, flags[2] != 0, flags[3] != 0
 	var pageCount uint32
-	if err := read(&pageCount); err != nil || pageCount == 0 || pageCount > 4096 {
+	if err := read(&pageCount); err != nil || pageCount == 0 || pageCount > 8192 {
 		return nil, fmt.Errorf("invalid Go FairPlay oracle page count")
 	}
 	for range pageCount {
@@ -177,6 +177,7 @@ func loadModelReader(input io.Reader) (*model, error) {
 type state struct {
 	model    *model
 	x        [31]uint64
+	vectors  [32][16]byte
 	sp       uint64
 	n, z     bool
 	c, v     bool
@@ -196,9 +197,241 @@ func (s *state) reset() {
 	}
 	s.touched = s.touched[:0]
 	s.x = s.model.registers
+	s.vectors = [32][16]byte{}
 	s.sp = s.model.sp
 	s.n, s.z, s.c, s.v = s.model.n, s.model.z, s.model.c, s.model.v
 
+}
+
+func (s *state) vectorLane(register, lane, bits int) uint64 {
+	offset := lane * bits / 8
+	switch bits {
+	case 8:
+		return uint64(s.vectors[register][offset])
+	case 16:
+		return uint64(binary.LittleEndian.Uint16(s.vectors[register][offset:]))
+	case 32:
+		return uint64(binary.LittleEndian.Uint32(s.vectors[register][offset:]))
+	case 64:
+		return binary.LittleEndian.Uint64(s.vectors[register][offset:])
+	default:
+		panic("unsupported vector lane width")
+	}
+}
+
+func (s *state) setVectorLane(register, lane, bits int, value uint64) {
+	offset := lane * bits / 8
+	switch bits {
+	case 8:
+		s.vectors[register][offset] = byte(value)
+	case 16:
+		binary.LittleEndian.PutUint16(s.vectors[register][offset:], uint16(value))
+	case 32:
+		binary.LittleEndian.PutUint32(s.vectors[register][offset:], uint32(value))
+	case 64:
+		binary.LittleEndian.PutUint64(s.vectors[register][offset:], value)
+	default:
+		panic("unsupported vector lane width")
+	}
+}
+
+func (s *state) clearVector(register int) { s.vectors[register] = [16]byte{} }
+
+func (s *state) loadVector(register int, address uint64, size int) error {
+	data, err := s.outputBytes(address, size)
+	if err != nil {
+		return err
+	}
+	s.clearVector(register)
+	copy(s.vectors[register][:], data)
+	return nil
+}
+
+func (s *state) storeVector(register int, address uint64, size int) error {
+	return s.store(address, s.vectors[register][:size])
+}
+
+func (s *state) vectorDup(register, lanes, bits int, value uint64) {
+	s.clearVector(register)
+	for lane := range lanes {
+		s.setVectorLane(register, lane, bits, value)
+	}
+}
+
+func (s *state) vectorBinary(operation string, destination, left, right, lanes, bits int) {
+	var result [16]byte
+	for lane := range lanes {
+		leftValue := s.vectorLane(left, lane, bits)
+		rightValue := s.vectorLane(right, lane, bits)
+		var value uint64
+		switch operation {
+		case "add":
+			value = leftValue + rightValue
+		case "sub":
+			value = leftValue - rightValue
+		case "mul":
+			value = leftValue * rightValue
+		case "eor":
+			value = leftValue ^ rightValue
+		default:
+			panic("unsupported vector binary operation")
+		}
+		offset := lane * bits / 8
+		switch bits {
+		case 8:
+			result[offset] = byte(value)
+		case 16:
+			binary.LittleEndian.PutUint16(result[offset:], uint16(value))
+		case 32:
+			binary.LittleEndian.PutUint32(result[offset:], uint32(value))
+		case 64:
+			binary.LittleEndian.PutUint64(result[offset:], value)
+		}
+	}
+	s.vectors[destination] = result
+}
+
+func (s *state) vectorMultiplyAccumulate(destination, left, right, lanes, bits int, subtract bool) {
+	previous := s.vectors[destination]
+	for lane := range lanes {
+		offset := lane * bits / 8
+		var accumulator uint64
+		switch bits {
+		case 8:
+			accumulator = uint64(previous[offset])
+		case 16:
+			accumulator = uint64(binary.LittleEndian.Uint16(previous[offset:]))
+		case 32:
+			accumulator = uint64(binary.LittleEndian.Uint32(previous[offset:]))
+		case 64:
+			accumulator = binary.LittleEndian.Uint64(previous[offset:])
+		}
+		product := s.vectorLane(left, lane, bits) * s.vectorLane(right, lane, bits)
+		if subtract {
+			s.setVectorLane(destination, lane, bits, accumulator-product)
+		} else {
+			s.setVectorLane(destination, lane, bits, accumulator+product)
+		}
+	}
+}
+
+func (s *state) vectorUnsignedMultiplyLong(destination, left, right, lanes, inputBits int, high bool) {
+	start := 0
+	if high {
+		start = lanes
+	}
+	leftValues := make([]uint64, lanes)
+	rightValues := make([]uint64, lanes)
+	for lane := range lanes {
+		leftValues[lane] = s.vectorLane(left, start+lane, inputBits)
+		rightValues[lane] = s.vectorLane(right, start+lane, inputBits)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		value := leftValues[lane] * rightValues[lane]
+		s.setVectorLane(destination, lane, inputBits*2, value)
+	}
+}
+
+func (s *state) vectorUnsignedShiftLong(destination, source, lanes, inputBits, amount int, high bool) {
+	start := 0
+	if high {
+		start = lanes
+	}
+	values := make([]uint64, lanes)
+	for lane := range lanes {
+		values[lane] = s.vectorLane(source, start+lane, inputBits)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		s.setVectorLane(destination, lane, inputBits*2, values[lane]<<amount)
+	}
+}
+
+func (s *state) vectorShiftRightNarrow(destination, source, lanes, outputBits, amount int) {
+	values := make([]uint64, lanes)
+	for lane := range lanes {
+		values[lane] = s.vectorLane(source, lane, outputBits*2)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		s.setVectorLane(destination, lane, outputBits, values[lane]>>amount)
+	}
+}
+
+func (s *state) vectorUnsignedShiftRight(destination, source, lanes, bits, amount int) {
+	values := make([]uint64, lanes)
+	for lane := range lanes {
+		values[lane] = s.vectorLane(source, lane, bits)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		s.setVectorLane(destination, lane, bits, values[lane]>>amount)
+	}
+}
+
+func (s *state) vectorUnsignedShift(destination, source, shifts, lanes, bits int) {
+	values := make([]uint64, lanes)
+	shiftValues := make([]uint64, lanes)
+	for lane := range lanes {
+		values[lane] = s.vectorLane(source, lane, bits)
+		shiftValues[lane] = s.vectorLane(shifts, lane, bits)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		value := values[lane]
+		shift := int64(signExtendBits(shiftValues[lane], bits, 64))
+		if shift >= int64(bits) || shift <= -int64(bits) {
+			value = 0
+		} else if shift >= 0 {
+			value <<= uint(shift)
+		} else {
+			value >>= uint(-shift)
+		}
+		s.setVectorLane(destination, lane, bits, value)
+	}
+}
+
+func (s *state) vectorExtractNarrow(destination, source, lanes, outputBits int) {
+	values := make([]uint64, lanes)
+	for lane := range lanes {
+		values[lane] = s.vectorLane(source, lane, outputBits*2)
+	}
+	s.clearVector(destination)
+	for lane := range lanes {
+		s.setVectorLane(destination, lane, outputBits, values[lane])
+	}
+}
+
+func (s *state) vectorUnzipEven(destination, left, right, lanes, bits int) {
+	half := lanes / 2
+	leftValues := make([]uint64, half)
+	rightValues := make([]uint64, half)
+	for lane := range half {
+		leftValues[lane] = s.vectorLane(left, lane*2, bits)
+		rightValues[lane] = s.vectorLane(right, lane*2, bits)
+	}
+	s.clearVector(destination)
+	for lane := range half {
+		s.setVectorLane(destination, lane, bits, leftValues[lane])
+		s.setVectorLane(destination, half+lane, bits, rightValues[lane])
+	}
+}
+
+func (s *state) vectorEor3(destination, first, second, third int) {
+	for index := range 16 {
+		s.vectors[destination][index] = s.vectors[first][index] ^ s.vectors[second][index] ^ s.vectors[third][index]
+	}
+}
+
+func (s *state) vectorTable(destination int, tables []int, indexes int) {
+	var result [16]byte
+	for lane, index := range s.vectors[indexes] {
+		if int(index) < len(tables)*16 {
+			result[lane] = s.vectors[tables[int(index)/16]][int(index)%16]
+		}
+	}
+	s.vectors[destination] = result
 }
 
 func (s *state) begin(block [16]byte) error {
@@ -268,7 +501,7 @@ func (s *state) page(address uint64, write bool) ([]byte, error) {
 }
 
 func (s *state) load(address uint64, size int) (uint64, error) {
-	if size != 1 && size != 4 && size != 8 {
+	if size != 1 && size != 2 && size != 4 && size != 8 {
 		return 0, fmt.Errorf("unsupported oracle load size %d", size)
 	}
 	if address&(pageSize-1)+uint64(size) <= pageSize {
@@ -280,6 +513,8 @@ func (s *state) load(address uint64, size int) (uint64, error) {
 		switch size {
 		case 1:
 			return uint64(page[offset]), nil
+		case 2:
+			return uint64(binary.LittleEndian.Uint16(page[offset : offset+2])), nil
 		case 4:
 			return uint64(binary.LittleEndian.Uint32(page[offset : offset+4])), nil
 		default:
@@ -312,11 +547,47 @@ func (s *state) store(address uint64, value []byte) error {
 	return nil
 }
 
+func (s *state) mapZero(address, size uint64) error {
+	if size == 0 || address&(pageSize-1) != 0 {
+		return fmt.Errorf("invalid zero mapping %#x+%#x", address, size)
+	}
+	end := address + size
+	if end < address {
+		return fmt.Errorf("zero mapping overflows")
+	}
+	for page := address; page < end; page += pageSize {
+		if s.model.pages[page] == nil {
+			s.model.pages[page] = make([]byte, pageSize)
+		}
+	}
+	return nil
+}
+
+func (s *state) readCString(address uint64, limit int) (string, error) {
+	if limit <= 0 {
+		return "", fmt.Errorf("invalid C-string limit")
+	}
+	value := make([]byte, 0, min(limit, 256))
+	for len(value) < limit {
+		octet, err := s.load(address+uint64(len(value)), 1)
+		if err != nil {
+			return "", err
+		}
+		if octet == 0 {
+			return string(value), nil
+		}
+		value = append(value, byte(octet))
+	}
+	return "", fmt.Errorf("unterminated C string at %#x", address)
+}
+
 func (s *state) storeValue(address, value uint64, size int) error {
 	var buffer [8]byte
 	switch size {
 	case 1:
 		buffer[0] = byte(value)
+	case 2:
+		binary.LittleEndian.PutUint16(buffer[:2], uint16(value))
 	case 4:
 		binary.LittleEndian.PutUint32(buffer[:4], uint32(value))
 	case 8:
@@ -438,6 +709,15 @@ func (s *state) compare64(left, right uint64) {
 	s.v = ((left ^ right) & (left ^ result) & 0x8000000000000000) != 0
 }
 
+func (s *state) subtractWithFlags(left, right uint64, width int) uint64 {
+	if width == 32 {
+		s.compare32(uint32(left), uint32(right))
+		return uint64(uint32(left) - uint32(right))
+	}
+	s.compare64(left, right)
+	return left - right
+}
+
 func (s *state) addWithCarry(left, right uint64, carry bool, width int) uint64 {
 	carryValue := uint64(0)
 	if carry {
@@ -465,6 +745,22 @@ func multiplyHigh64(left, right uint64) uint64 {
 	return high
 }
 
+func signExtendBits(value uint64, bits, width int) uint64 {
+	if bits <= 0 || bits > width {
+		panic("invalid generated sign-extension width")
+	}
+	mask := bitMask(bits, width)
+	value &= mask
+	sign := uint64(1) << (bits - 1)
+	if value&sign != 0 {
+		value |= ^mask
+	}
+	if width == 32 {
+		return uint64(uint32(value))
+	}
+	return value
+}
+
 func unsignedDivide(left, right uint64, width int) uint64 {
 	if width == 32 {
 		divisor := uint32(right)
@@ -483,6 +779,10 @@ func (s *state) test32(value uint32) {
 	s.n, s.z, s.c, s.v = value&0x80000000 != 0, value == 0, false, false
 }
 
+func (s *state) test64(value uint64) {
+	s.n, s.z, s.c, s.v = value&0x8000000000000000 != 0, value == 0, false, false
+}
+
 func (s *state) setNZCV(value int) {
 	s.n = value&8 != 0
 	s.z = value&4 != 0
@@ -496,10 +796,14 @@ func (s *state) condition(name string) bool {
 		return s.z
 	case "ne":
 		return !s.z
+	case "hs":
+		return s.c
 	case "lo":
 		return !s.c
 	case "hi":
 		return s.c && !s.z
+	case "ls":
+		return !s.c || s.z
 	case "lt":
 		return s.n != s.v
 	case "le":
@@ -508,6 +812,14 @@ func (s *state) condition(name string) bool {
 		return !s.z && s.n == s.v
 	case "ge":
 		return s.n == s.v
+	case "mi":
+		return s.n
+	case "pl":
+		return !s.n
+	case "vs":
+		return s.v
+	case "vc":
+		return !s.v
 	default:
 		panic("unsupported generated condition: " + name)
 	}
