@@ -2168,6 +2168,7 @@ def main() -> int:
         _value: int,
         bounds: object,
     ) -> None:
+        nonlocal memory_event_ordinal
         start, end = bounds
         if address >= end or address + size <= start:
             return
@@ -2178,13 +2179,16 @@ def main() -> int:
                 {"limit": args.max_memory_read_events},
             )
             return
-        memory_range_read_events.append(
-            {
-                "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
-                "address": hex(address),
-                "size": size,
-            }
-        )
+        event: dict[str, object] = {
+            "ordinal": memory_event_ordinal,
+            "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
+            "address": hex(address),
+            "size": size,
+        }
+        memory_event_ordinal += 1
+        if args.include_memory_read_values:
+            event["value"] = hex(int.from_bytes(emulator.mem_read(address, size), "little"))
+        memory_range_read_events.append(event)
 
     def on_range_write(
         _uc: Uc,
@@ -2194,6 +2198,7 @@ def main() -> int:
         _value: int,
         bounds: object,
     ) -> None:
+        nonlocal memory_event_ordinal
         start, end = bounds
         if address >= end or address + size <= start:
             return
@@ -2204,13 +2209,16 @@ def main() -> int:
                 {"limit": args.max_memory_write_events},
             )
             return
-        memory_range_write_events.append(
-            {
-                "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
-                "address": hex(address),
-                "size": size,
-            }
-        )
+        event: dict[str, object] = {
+            "ordinal": memory_event_ordinal,
+            "pc": hex(emulator.reg_read(arm64_const.UC_ARM64_REG_PC)),
+            "address": hex(address),
+            "size": size,
+        }
+        memory_event_ordinal += 1
+        if args.include_memory_write_values:
+            event["value"] = hex(_value & ((1 << (size * 8)) - 1))
+        memory_range_write_events.append(event)
 
     def on_stopped_range_read(
         _uc: Uc,
